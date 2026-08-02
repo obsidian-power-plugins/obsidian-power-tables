@@ -1,7 +1,7 @@
-# build tooling — recreated any time with `npm install`
+# build tooling, recreated any time with `npm install`
 node_modules/
 
-# build output — attached to GitHub releases, not committed
+# build output, attached to GitHub releases, not committed
 main.js
 tests.cjs
 *.map

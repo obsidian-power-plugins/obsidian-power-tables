@@ -209,7 +209,7 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 
 			update(u: ViewUpdate) {
 				// Cell sub-editors mount before being placed in the table DOM, so
-				// the inTableCell check can flip after construction — rebuild on
+				// the inTableCell check can flip after construction, rebuild on
 				// focus/geometry changes too, not just doc/viewport/selection.
 				if (
 					u.docChanged ||
@@ -226,7 +226,7 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 
 			/**
 			 * Obsidian mounts cell editors with the cursor at the end of the raw
-			 * text — i.e. after the hidden </span> — so typed text would land
+			 * text (i.e. after the hidden </span>) so typed text would land
 			 * outside the wrapper. When a cell's doc is exactly one wrapped
 			 * value, keep an empty cursor inside the content.
 			 */
@@ -249,7 +249,7 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 			}
 
 			// CodeMirror silently disables a view plugin whose update throws
-			// ("CodeMirror plugin crashed" — easy to miss). Fail soft and loud.
+			// ("CodeMirror plugin crashed", easy to miss). Fail soft and loud.
 			private safeBuild(view: EditorView): { deco: DecorationSet; hidden: DecorationSet } {
 				try {
 					return this.build(view);
@@ -263,7 +263,7 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 				const decoB = new RangeSetBuilder<Decoration>();
 				const hideB = new RangeSetBuilder<Decoration>();
 				// Obsidian's focused-table-cell sub-editors report Source mode
-				// (their job is editing the cell's raw text) — but they are exactly
+				// (their job is editing the cell's raw text), but they are exactly
 				// where hiding matters most. Only bail on Source mode when the
 				// editor is NOT inside a table cell; the real Source-mode view has
 				// no table widgets, so it always stays raw.
@@ -274,15 +274,15 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 				}
 				const sel = view.state.selection.ranges;
 				// Strict interior overlap only: a cursor merely sitting at a tag
-				// boundary — which is almost everywhere in a tiny cell editor
-				// whose whole doc is one span — must not reveal the markup.
+				// boundary, which is almost everywhere in a tiny cell editor
+				// whose whole doc is one span, must not reveal the markup.
 				const touched = (a: number, b: number) => sel.some((r) => r.to > a && r.from < b);
 				// Don't trust visibleRanges: table content is widget-hidden in the
 				// main editor, and a just-mounted cell editor reports empty ranges
 				// until measured. Docs are small; scan everything.
 				const ranges =
 					view.state.doc.length <= 100000 ? [{ from: 0, to: view.state.doc.length }] : view.visibleRanges;
-				// The B/I/S buttons wrap the whole cell value in **/*/~~ — hide those
+				// The B/I/S buttons wrap the whole cell value in **/*/~~, hide those
 				// markers like the span tags, but only in cell sub-editors, where the
 				// document IS one cell's content so a whole-doc wrap is unambiguous.
 				// The main editor keeps Obsidian's normal marker behavior.
@@ -678,7 +678,7 @@ export default class PowerTablesPlugin extends Plugin {
 		);
 		// Live Preview cell focus: the widget assigns its focused cell before
 		// focusing the cell editor, so a bubbling focusin always reads the NEW
-		// cell — click handlers fire too early and lag one cell behind.
+		// cell, click handlers fire too early and lag one cell behind.
 		this.registerDomEvent(document, "focusin", (evt) => {
 			if (evt.target instanceof Element && evt.target.closest(".cm-table-widget, td, th")) this.updatePanels();
 		});
@@ -737,7 +737,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			if (this.settings.openOnStart) void this.openPanel();
 			// Reading views rendered before this plugin (re)loaded carry no
-			// table stamps — re-run their post-processors once.
+			// table stamps, re-run their post-processors once.
 			this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => {
 				const v = leaf.view;
 				if (v instanceof MarkdownView && v.getMode() === "preview") {
@@ -773,7 +773,7 @@ export default class PowerTablesPlugin extends Plugin {
 	private scanAll() {
 		// Obsidian's focused table cells (and similar embeds) get their own
 		// small CodeMirror editors that don't reliably include registered
-		// editor extensions — inject the tag-hider into any that lack it, and
+		// editor extensions, inject the tag-hider into any that lack it, and
 		// poke any cell editor that built before it was attached/measured and
 		// ended up with zero decorations despite ptb spans in its text.
 		document.body.querySelectorAll(".cm-editor").forEach((el) => {
@@ -881,7 +881,7 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	/** Copy a span's background onto its <td>/<th> so the whole cell fills, like a
-	 *  spreadsheet — unless it's a text highlight (ptb-hl), which stays on the text. */
+	 *  spreadsheet, unless it's a text highlight (ptb-hl), which stays on the text. */
 	private lift(span: HTMLElement) {
 		const cell = span.closest("td, th") as HTMLElement | null;
 		if (!cell) return;
@@ -990,7 +990,7 @@ export default class PowerTablesPlugin extends Plugin {
 			this.updatePanels();
 			return;
 		}
-		// Table not stamped (e.g. the pane rendered before the plugin loaded) —
+		// Table not stamped (e.g. the pane rendered before the plugin loaded)
 		// resolve by position and content instead.
 		void this.fallbackTargetFromCell(cell).then((fb) => {
 			if (!fb) return;
@@ -1105,13 +1105,13 @@ export default class PowerTablesPlugin extends Plugin {
 
 	resolveTarget(silent = false): CellTarget | null {
 		// The sidebar is a workspace leaf, so clicking its buttons makes IT the
-		// active view — fall back to the most recent note leaf in that case.
+		// active view, fall back to the most recent note leaf in that case.
 		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const recent = this.app.workspace.getMostRecentLeaf();
 		const view = active ?? (recent?.view instanceof MarkdownView ? recent.view : null);
 		if (view && view.file && view.getMode() !== "preview") {
 			const editor = view.editor;
-			// The focused table-cell editor knows its exact doc offsets — more
+			// The focused table-cell editor knows its exact doc offsets, more
 			// reliable than the main cursor, which Obsidian doesn't always sync
 			// when an empty cell gains focus.
 			const wcell = this.widgetCellAt(view);
@@ -1174,7 +1174,7 @@ export default class PowerTablesPlugin extends Plugin {
 	/** Map a table-widget cell (structural row/col) to doc coordinates: the
 	 *  widget's DOM anchor gives the table's first line, widget row 0 is the
 	 *  header, and body rows sit below the delimiter. Structural indices are
-	 *  stable — unlike character offsets or the main cursor, which Obsidian
+	 *  stable, unlike character offsets or the main cursor, which Obsidian
 	 *  doesn't always keep in sync. All internals feature-detected. */
 	private widgetCellLine(
 		em: unknown,
@@ -1496,7 +1496,7 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	/** Live Preview's table widget caches column alignment when it is built and
-	 *  never re-parses the delimiter row on outside edits — it even serializes
+	 *  never re-parses the delimiter row on outside edits, it even serializes
 	 *  the stale cache back over them on its next write. While a cell editor is
 	 *  active, go through the widget's own setAlignment (updates the DOM, the
 	 *  cache, and the markdown in one step); rewriting the delimiter row stays
@@ -1512,7 +1512,7 @@ export default class PowerTablesPlugin extends Plugin {
 		});
 		for (const view of views) {
 			if (view.file?.path !== path || view.getMode() === "preview") continue;
-			// Undocumented internals — feature-detect every step and fall through cleanly.
+			// Undocumented internals, feature-detect every step and fall through cleanly.
 			const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor as unknown);
 			const table = (
 				em as {
@@ -1785,7 +1785,7 @@ export default class PowerTablesPlugin extends Plugin {
 			(dark && this.settings.headerFillDark) || this.settings.headerFill
 		);
 		document.body.toggleClass("ptb-sticky", this.settings.stickyHeaders);
-		this.queueScan(); // the filter row is DOM-injected, not CSS-driven — a rescan applies the toggle
+		this.queueScan(); // the filter row is DOM-injected, not CSS-driven, a rescan applies the toggle
 	}
 
 	/** One-click paste: append clipboard rows (Excel/Sheets tabs or CSV) to the targeted table. */
@@ -2000,7 +2000,7 @@ export default class PowerTablesPlugin extends Plugin {
 		if (editor) {
 			const lines = editor.getValue().split("\n");
 			if (!lines.some(marked)) return;
-			// Never reformat the cell the cursor is in — it would fight typing.
+			// Never reformat the cell the cursor is in, it would fight typing.
 			// The cell catches up on the next pass after the cursor moves on.
 			let skip: { line: number; col: number } | undefined;
 			const cur = editor.getCursor("head");
@@ -2209,7 +2209,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.updateStatsChip();
 	}
 
-	/** Full panel re-render (not just a refresh) — swatch grids re-read the palette. */
+	/** Full panel re-render (not just a refresh), swatch grids re-read the palette. */
 	rebuildPanels() {
 		for (const p of this.panels) p.rebuild();
 	}
@@ -2312,7 +2312,7 @@ export default class PowerTablesPlugin extends Plugin {
 }
 
 /**
- * The Power Tables control surface — one implementation rendered both in the
+ * The Power Tables control surface, one implementation rendered both in the
  * right-sidebar view (primary, per the design handoff) and inside the
  * floating panel.
  */
@@ -2352,7 +2352,7 @@ class PanelUI {
 		b.addEventListener("mousedown", (e) => e.preventDefault());
 	}
 
-	/** Re-render from scratch — used when a theme flip swaps the active palette. */
+	/** Re-render from scratch, used when a theme flip swaps the active palette. */
 	rebuild() {
 		this.build();
 	}
@@ -2379,7 +2379,7 @@ class PanelUI {
 		this.summaryEl = root.createDiv({ cls: "ptb-summary", text: "Click a table cell to begin" });
 
 		// Excel-style formula bar: shows the targeted cell's value (or its
-		// formula); Enter or leaving the bar commits, Esc reverts —
+		// formula); Enter or leaving the bar commits, Esc reverts
 		// "=SUM(B1:B3)" becomes a live formula cell.
 		const fx = root.createDiv({ cls: "ptb-fx" });
 		fx.createSpan({ cls: "ptb-fx-icon", text: "ƒx" });
@@ -2606,7 +2606,7 @@ class PanelUI {
 		return inp;
 	}
 
-	/** Native color inputs have no close API — swapping in a fresh input is the
+	/** Native color inputs have no close API, swapping in a fresh input is the
 	 *  one reliable way to dismiss the popup, which lets "More colors…" toggle. */
 	private toggleCustomPicker() {
 		if (this.pickerOpen) {
@@ -2642,7 +2642,7 @@ class PanelUI {
 		this.textChip.style.backgroundColor = this.plugin.settings.lastText;
 		this.hlChip.style.backgroundColor = this.plugin.settings.lastHl;
 		// While the formula bar is being edited, the header and bar stay frozen
-		// on the cell whose content was loaded — the commit goes there too.
+		// on the cell whose content was loaded, the commit goes there too.
 		if (document.activeElement === this.formulaInput) return;
 		this.fxTarget = this.plugin.resolveTarget(true);
 		const ref = this.plugin.currentRef(this.fxTarget);
@@ -2745,7 +2745,7 @@ class ColorToolbar {
 	}
 }
 
-/** The right-sidebar leaf hosting the panel — the design's primary surface. */
+/** The right-sidebar leaf hosting the panel, the design's primary surface. */
 class PowerTablesView extends ItemView {
 	private ui: PanelUI | null = null;
 
@@ -3095,7 +3095,7 @@ class RulesModal extends Modal {
 			return { op: "between", value: `${parts[0].trim()}~${parts[1].trim()}`, bg: this.bg, fg: this.fg };
 		}
 		if (this.op === "regex") {
-			// the stored tag strips : ; " and | — drop them up front so what
+			// the stored tag strips : ; " and |, drop them up front so what
 			// the user tests is what actually runs
 			const clean = this.value.replace(/[:"|;]/g, "").trim();
 			if (!clean) {
@@ -3186,7 +3186,7 @@ class FormatCellsModal extends Modal {
 			this.spec = stickySpec;
 			this.sticky = true;
 		}
-		// Seed the samples — and, without a sticky, the starting type — from the targeted cell.
+		// Seed the samples (and, without a sticky, the starting type) from the targeted cell.
 		const raw = plugin.currentCellRaw(this.target);
 		if (!raw) return;
 		const clean = raw
@@ -3356,7 +3356,7 @@ class FormatCellsModal extends Modal {
 			const chips: HTMLButtonElement[] = [];
 			const sync = () => chips.forEach((b) => b.toggleClass("is-active", s.symbol === b.textContent));
 			// custom symbol updates in place (no re-render) so typing keeps focus;
-			// currency symbols (₹, ₩, ₿…) stay summable — letter codes format only
+			// currency symbols (₹, ₩, ₿…) stay summable, letter codes format only
 			const custom = row.createEl("input", {
 				cls: "ptb-fmt-custom",
 				attr: { type: "text", placeholder: "Other…", maxlength: "4", spellcheck: "false" },
@@ -3544,7 +3544,7 @@ class PowerTablesSettingTab extends PluginSettingTab {
 		// click pins it open (the desc stays one line)
 		const help = (st: Setting, text: string) => {
 			// no aria-label here: Obsidian auto-shows its native black tooltip
-			// for any labelled element, which doubled up with the popover
+			// for any labeled element, which doubled up with the popover
 			const ic = st.nameEl.createSpan({ cls: "ptb-setting-help" });
 			setIcon(ic, "help-circle");
 			ic.addEventListener("mouseenter", () => this.openHelp(ic, text, false));

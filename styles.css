@@ -119,7 +119,7 @@ button.ptb-mode.is-active {
 	margin: 8px 0 4px;
 }
 
-/* swatch grids — theme row, generated tint/shade grid, standard row */
+/* swatch grids, theme row, generated tint/shade grid, standard row */
 .ptb-grid {
 	display: grid;
 	grid-template-columns: repeat(8, 1fr);
@@ -516,7 +516,7 @@ tr.ptb-fhidden {
 }
 
 /* the This-table toggles in the panel show the effective state. Six flags
-   don't fit one line in a sidebar — a 3-up grid keeps them readable. */
+   don't fit one line in a sidebar, a 3-up grid keeps them readable. */
 .ptb-tflagrow {
 	display: grid;
 	grid-template-columns: 1fr 1fr 1fr;
@@ -776,7 +776,7 @@ body.ptb-cellrefs .cm-table-widget table:not(.ptb-t-noguides),
 	margin-left: 26px;
 }
 
-/* letters: only the table's real first row — the thead row, or the first
+/* letters: only the table's real first row, the thead row, or the first
    tbody row when there is no thead (never both) */
 body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *,
 :is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > * {

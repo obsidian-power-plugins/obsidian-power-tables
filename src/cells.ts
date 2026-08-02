@@ -1,5 +1,5 @@
 /**
- * Pure Markdown-table cell logic — no Obsidian imports so it can run under Node for tests.
+ * Pure Markdown-table cell logic: no Obsidian imports so it can run under Node for tests.
  *
  * Colors are stored inside the cell as a single inline span:
  *   | Queen | <span class="ptb ptb-fill" style="background-color:#00FF00;">$19.60</span> |
@@ -169,7 +169,7 @@ export function buildCellContent(
 	const b = borders ? borders.replace(/[^tblrTBLR]/g, "") : "";
 	const width = w && /^\d{2,4}$/.test(w) ? w : null;
 	if (!bg && !fg && !calc && !formula && !b && !fmt && !width && !rule && !tbl) return inner;
-	// Keep the wrapper as short as possible — it is what users see as raw
+	// Keep the wrapper as short as possible, it is what users see as raw
 	// markup when a cell is edited in Source mode. parseCellContent still
 	// reads the older, longer formats (class="ptb ptb-sum ptb-fill",
 	// background-color:, data-sum=) so existing notes upgrade on touch.
@@ -190,7 +190,7 @@ export function buildCellContent(
 	return `<span ${attrs}>${inner}</span>`;
 }
 
-/** Colors travel inside a style="" attribute — strip anything that could break out of it. */
+/** Colors travel inside a style="" attribute, strip anything that could break out of it. */
 export function sanitizeColor(c: string): string {
 	return c.replace(/[^#a-zA-Z0-9(),.%\s-]/g, "").trim();
 }
@@ -355,7 +355,7 @@ export function parseNumeric(raw: string): { value: number; decimals: number; cu
 
 /**
  * Aggregate the numeric cells in the column (all body rows except line `ln`
- * and the header) — or, direction "row", the other cells of row `ln`.
+ * and the header), or, direction "row", the other cells of row `ln`.
  * Output style follows the inputs: max decimal places, shared currency symbol
  * (count is always a bare integer).
  */
@@ -855,7 +855,7 @@ export function planAlign(lines: string[], target: CellTargetLoc, align: ColAlig
 }
 
 /** Map an absolute alignment onto the logical direction ("start"/"end") that
- *  Obsidian's Live Preview table widget expects — it resolves start/end against
+ *  Obsidian's Live Preview table widget expects, it resolves start/end against
  *  the table's text direction. */
 export function alignToLogical(align: ColAlign, rtl: boolean): "start" | "center" | "end" {
 	if (align === "center") return "center";
@@ -863,7 +863,7 @@ export function alignToLogical(align: ColAlign, rtl: boolean): "start" | "center
 }
 
 /** Length of the emphasis markers (**, ~~, *) fully wrapping the text, e.g.
- *  "**~~750~~**" → { lead: 4, trail: 4 }. Only whole-value wrappers count —
+ *  "**~~750~~**" → { lead: 4, trail: 4 }. Only whole-value wrappers count
  *  which is what the panel's B/I/S buttons write; partial emphasis inside the
  *  text is left alone. */
 /** Split whole-value emphasis wrappers from the text: "**750**" → lead "**", core "750", trail "**". */
@@ -921,7 +921,7 @@ function formatValue(value: number, decimals: number, fmt: NumFmt): string {
 
 /**
  * One-shot number formatting: rewrites numeric cell values in the given
- * style (markdown stays the source of truth — there is no hidden format
+ * style (markdown stays the source of truth, there is no hidden format
  * flag). Non-numeric cells and live-calc cells are left alone.
  */
 export function planFormatNumber(lines: string[], target: CellTargetLoc, fmt: NumFmt, scope: Scope): EditPlan | null {
@@ -1000,7 +1000,7 @@ function grouped(abs: number, decimals: number, thousands: boolean): string {
 	});
 }
 
-/** Format a numeric value per spec — text only; red negatives are the caller's color concern. */
+/** Format a numeric value per spec, text only; red negatives are the caller's color concern. */
 export function formatBySpec(value: number, spec: FmtSpec): string {
 	const neg = value < 0;
 	const abs = Math.abs(value);
@@ -1193,7 +1193,7 @@ export function planFormatCells(lines: string[], target: CellTargetLoc, spec: Fm
 			const parsed = parseCellContent(piece);
 			let next: string | null;
 			if (parsed.calc || parsed.formula) {
-				// live cells can't hold a one-shot value — store the format on
+				// live cells can't hold a one-shot value, store the format on
 				// the cell instead; the recalc pass renders through it
 				const tag = fmtToTag(spec);
 				next =
@@ -1217,7 +1217,7 @@ export function planFormatCells(lines: string[], target: CellTargetLoc, spec: Fm
 /**
  * Run a single-cell plan once per target (the table editor's multi-cell
  * selection) and merge the rewrites into one plan. Only for plans whose edits
- * are pure line replacements — every styling/format/border plan qualifies.
+ * are pure line replacements, every styling/format/border plan qualifies.
  */
 export function planMulti(
 	lines: string[],
@@ -1321,7 +1321,7 @@ export function planStickyFormat(
 	let changed = false;
 	if (axis === "row") {
 		// row tags carry a "row:" prefix (plain tags on body cells are
-		// cell-level formats); exactly one anchor per row — clear strays
+		// cell-level formats); exactly one anchor per row, clear strays
 		const want0 = tag ? `row:${tag}` : null;
 		for (let c = 0; c < r.cellCount; c++) {
 			const parsed = parseCellContent(r.pieces[c + 1]);
@@ -1348,7 +1348,7 @@ export function planStickyFormat(
  * Apply every sticky format marker in the document: header-cell tags format
  * their column's body cells, body-cell tags format their whole row (row wins
  * where both apply). `skip` exempts the cell being edited so the debounced
- * pass never fights the cursor. Idempotent — formatted output re-parses to
+ * pass never fights the cursor. Idempotent, formatted output re-parses to
  * the same value, so the modify events our own write fires settle in one pass.
  */
 export function applyStickyFormats(lines: string[], skip?: { line: number; col: number }): { line: number; text: string }[] {
@@ -1378,7 +1378,7 @@ export function applyStickyFormats(lines: string[], skip?: { line: number; col: 
 				delimSeen = true;
 				continue;
 			}
-			if (!delimSeen) continue; // header zone — labels stay as typed
+			if (!delimSeen) continue; // header zone, labels stay as typed
 			let rowSpec: FmtSpec | null = null;
 			for (let c = 0; c < r.cellCount && !rowSpec; c++) {
 				const f = parseCellContent(r.pieces[c + 1]).fmt;
@@ -1940,7 +1940,7 @@ export function matchCriteria(raw: string, crit: FVal): boolean {
  * not addressable). The formula's own cell is excluded from ranges and is an
  * error as a direct ref (circularity guard on top of the recalc pass cap).
  * Numbers flow through math; text flows through refs, IF, and comparisons.
- * Throws on any invalid input — callers render #ERR.
+ * Throws on any invalid input, callers render #ERR.
  */
 export function evalFormula(src: string, rows: string[][], selfRow: number, selfCol: number): FVal {
 	const toks = tokenizeFormula(src.replace(/^=/, ""));
@@ -2179,7 +2179,7 @@ export function looksLikeFormula(inner: string): boolean {
 /**
  * Set a cell's raw value from the formula bar. "=…" input becomes a live
  * formula cell (value stored, formula in data-f); anything else becomes plain
- * text — replacing any formula or live calc, keeping colors.
+ * text, replacing any formula or live calc, keeping colors.
  */
 export function planSetCellValue(lines: string[], target: CellTargetLoc, raw: string): EditPlan | null {
 	const ln = locateLine(lines, target);
@@ -2253,7 +2253,7 @@ export function scaleOwns(color: string | null, lo: string, hi: string): boolean
 
 /**
  * Apply a coloring rule to every matching body cell in the target's column.
- * This is a one-shot bulk action writing real colors into the markdown — no
+ * This is a one-shot bulk action writing real colors into the markdown, no
  * hidden rule state to drift out of sync; rerun it after data changes.
  */
 /** Does a cell value satisfy a rule? Shared by one-shot apply and live rules. */
@@ -2470,7 +2470,7 @@ export function applyLiveRules(lines: string[]): { line: number; text: string }[
 						const parsed = parseCellContent(r.pieces[c + 1]);
 						// Rules are checked in stored order; the first hit colors the
 						// cell. A color counts as rule-owned (safe to repaint or clear)
-						// if ANY of the column's rules could have written it — anything
+						// if ANY of the column's rules could have written it, anything
 						// else is hand-painted and wins. For scale rules the winning
 						// fill is interpolated, and any color between the endpoints
 						// counts as owned.
@@ -2612,7 +2612,7 @@ function mixToward(rgb: [number, number, number], target: number, f: number): st
 
 /**
  * Office-style tint/shade column for a theme color: light colors darken in
- * steps, dark colors lighten, and mid colors get 3 tints + 2 shades — the
+ * steps, dark colors lighten, and mid colors get 3 tints + 2 shades, the
  * same shape as Word's shading picker.
  */
 export function shadeVariants(base: string): string[] {
@@ -3047,7 +3047,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /**
  * The same three-way rule, entry by entry.
  *
- * A key holding one value per item — per folder, per field, per speaker — is a
+ * A key holding one value per item (per folder, per field, per speaker) is a
  * whole vault's worth of settings behind a single name, and merging it whole
  * meant changing ONE of them published all of them. Every item another device
  * configured since this one last read was erased by a device that had never
