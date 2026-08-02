@@ -1,0 +1,1019 @@
+/* ---------- floating panel ---------- */
+
+.ptb-toolbar {
+	position: fixed;
+	z-index: var(--layer-popover, 999);
+	width: 238px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border-hover);
+	border-radius: var(--radius-m, 8px);
+	box-shadow: var(--shadow-s), 0 6px 22px rgba(0, 0, 0, 0.14);
+	font-size: 12px;
+	user-select: none;
+	overflow: hidden;
+}
+
+.ptb-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 6px 5px 9px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	cursor: grab;
+	color: var(--text-muted);
+}
+
+.ptb-head:active {
+	cursor: grabbing;
+}
+
+.ptb-grip {
+	display: flex;
+	align-items: center;
+	opacity: 0.6;
+}
+
+.ptb-grip svg,
+.ptb-close svg {
+	width: 13px;
+	height: 13px;
+}
+
+.ptb-title {
+	flex: 1;
+	font-weight: 600;
+	font-size: 11.5px;
+	color: var(--text-normal);
+}
+
+.ptb-close {
+	display: flex;
+	align-items: center;
+	cursor: pointer;
+	border-radius: 4px;
+	padding: 3px;
+}
+
+.ptb-close:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ptb-body {
+	padding: 8px 10px 9px;
+}
+
+/* fill / text segmented switch with current-color bars */
+.ptb-modes {
+	display: flex;
+	gap: 2px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 2px;
+	margin-bottom: 6px;
+}
+
+button.ptb-mode {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 3px;
+	height: auto;
+	padding: 4px 0 5px;
+	font-size: 11px;
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	border-radius: 4px;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+button.ptb-mode:hover {
+	color: var(--text-normal);
+}
+
+button.ptb-mode.is-active {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.ptb-chip {
+	display: block;
+	width: 32px;
+	height: 4px;
+	border-radius: 2px;
+	border: 1px solid var(--background-modifier-border);
+}
+
+.ptb-label {
+	font-size: 9.5px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-faint);
+	margin: 8px 0 4px;
+}
+
+/* swatch grids — theme row, generated tint/shade grid, standard row */
+.ptb-grid {
+	display: grid;
+	grid-template-columns: repeat(8, 1fr);
+	gap: 3px;
+}
+
+.ptb-span2 {
+	grid-column: 1 / -1;
+}
+
+/* Excel-style stats chip for a drag selection */
+.ptb-stats {
+	position: fixed;
+	bottom: 28px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: var(--layer-popover, 999);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: #1e1e24;
+	color: #fff;
+	border-radius: 7px;
+	padding: 6px 12px;
+	font-size: 11.5px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+button.ptb-stats-btn {
+	height: auto;
+	padding: 3px 8px;
+	font-size: 11px;
+	border-radius: 5px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.ptb-grid.ptb-variants {
+	gap: 2px 3px;
+	margin-top: 3px;
+}
+
+button.ptb-swatch {
+	width: 100%;
+	height: 17px;
+	min-width: 0;
+	padding: 0;
+	border-radius: 3px;
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: none;
+	cursor: pointer;
+	line-height: 1;
+}
+
+.ptb-variants button.ptb-swatch {
+	height: 13px;
+	border-radius: 2px;
+}
+
+button.ptb-swatch:hover {
+	transform: scale(1.2);
+	border-color: var(--text-normal);
+	position: relative;
+	z-index: 1;
+}
+
+/* No color + More colors… share one row */
+.ptb-items {
+	margin-top: 8px;
+	display: flex;
+	gap: 2px;
+}
+
+button.ptb-item {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	flex: 1;
+	min-width: 0;
+	height: auto;
+	padding: 4px 6px;
+	font-size: 11.5px;
+	justify-content: flex-start;
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	border-radius: 4px;
+	color: var(--text-normal);
+	cursor: pointer;
+}
+
+button.ptb-item:hover {
+	background: var(--background-modifier-hover);
+}
+
+.ptb-noicon {
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
+	border: 1px solid var(--background-modifier-border);
+	background:
+		linear-gradient(to top right, transparent 42%, var(--color-red, #e93147) 46%, var(--color-red, #e93147) 54%, transparent 58%),
+		var(--background-primary);
+}
+
+.ptb-item-icon {
+	display: flex;
+	align-items: center;
+	color: var(--text-muted);
+}
+
+.ptb-item-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+input.ptb-hidden-color {
+	position: absolute;
+	width: 0;
+	height: 0;
+	opacity: 0;
+	border: none;
+	padding: 0;
+	pointer-events: none;
+}
+
+.ptb-sep {
+	height: 1px;
+	background: var(--background-modifier-border);
+	margin: 8px -10px;
+}
+
+/* table actions */
+.ptb-foot {
+	display: flex;
+	gap: 6px;
+}
+
+button.ptb-mini {
+	flex: 1;
+	font-size: 11px;
+	height: auto;
+	padding: 4px 8px;
+	box-shadow: none;
+}
+
+.ptb-hint {
+	color: var(--text-faint);
+	font-size: 9.5px;
+	margin-top: 7px;
+	line-height: 1.35;
+	text-align: center;
+}
+
+/* ---------- shared panel (sidebar + floating body) ---------- */
+
+.ptb-panel {
+	font-size: 12px;
+	user-select: none;
+}
+
+.ptb-sidebar {
+	padding: 10px 12px;
+}
+
+.ptb-panelhead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 2px;
+}
+
+.ptb-paneltitle {
+	font-weight: 700;
+	font-size: 12.5px;
+	flex: 1;
+	color: var(--text-normal);
+}
+
+.ptb-refchip {
+	font-family: var(--font-monospace);
+	font-size: 11px;
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 5px;
+	padding: 1px 6px;
+}
+
+.ptb-gear {
+	display: flex;
+	align-items: center;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.ptb-gear:hover {
+	color: var(--text-normal);
+}
+
+.ptb-gear svg {
+	width: 14px;
+	height: 14px;
+}
+
+.ptb-summary {
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-bottom: 4px;
+}
+
+.ptb-fx {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 2px 0 4px;
+}
+
+.ptb-fx-icon {
+	font-family: var(--font-monospace);
+	font-size: 11px;
+	font-style: italic;
+	color: var(--text-faint);
+}
+
+input.ptb-fx-input {
+	flex: 1;
+	height: 26px;
+	font-family: var(--font-monospace);
+	font-size: 11.5px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 5px;
+	background: var(--background-primary);
+	padding: 0 7px;
+}
+
+input.ptb-fx-modal-input {
+	width: 100%;
+	font-family: var(--font-monospace);
+	font-size: 13px;
+	padding: 6px 8px;
+}
+
+.ptb-rule-swatches {
+	display: flex;
+	gap: 4px;
+	margin-bottom: 6px;
+}
+
+button.ptb-rule-swatch {
+	width: 24px;
+	height: 24px;
+	min-width: 0;
+	padding: 0;
+	border-radius: 5px;
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: none;
+	cursor: pointer;
+}
+
+button.ptb-rule-swatch.is-active {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+}
+
+/* stored-rule list in the Rules dialog */
+.ptb-rulelist {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 4px 0 10px;
+}
+
+.ptb-rulerow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+}
+
+.ptb-rulerow.is-editing {
+	border-color: var(--interactive-accent);
+}
+
+.ptb-rulecond {
+	flex: 1;
+	font-size: 13px;
+}
+
+.ptb-rulechips {
+	display: inline-flex;
+	gap: 3px;
+}
+
+.ptb-rulechip {
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
+	border: 1px solid var(--background-modifier-border);
+	display: inline-block;
+}
+
+.ptb-rulechip.ptb-chip-none {
+	background: repeating-linear-gradient(
+		45deg,
+		transparent,
+		transparent 3px,
+		var(--background-modifier-border) 3px,
+		var(--background-modifier-border) 5px
+	);
+}
+
+button.ptb-rulebtn {
+	flex: 0 0 auto;
+	width: 26px;
+}
+
+/* global table appearance (opt-in settings). Per-table overrides ride on the
+   table element (from a data-tbl header marker): .ptb-t-striped forces on,
+   .ptb-t-nostriped forces off, and so on for compact, guides, and headerfill. */
+body.ptb-striped .markdown-rendered table:not(.ptb-t-nostriped) tbody tr:nth-child(even) > td,
+body.ptb-striped .cm-table-widget table:not(.ptb-t-nostriped) tr:nth-child(even) > td,
+.markdown-rendered table.ptb-t-striped tbody tr:nth-child(even) > td,
+.cm-table-widget table.ptb-t-striped tr:nth-child(even) > td {
+	background-color: var(--background-secondary);
+}
+
+/* sticky headers need an opaque th so scrolled rows never bleed through.
+   This sits BEFORE the header-fill rule on purpose: same specificity, so an
+   active header fill wins the background; per-cell inline colors beat both. */
+body.ptb-sticky .markdown-rendered table:not(.ptb-t-nosticky) th,
+body.ptb-sticky .cm-table-widget table:not(.ptb-t-nosticky) th,
+.markdown-rendered table.ptb-t-sticky th,
+.cm-table-widget table.ptb-t-sticky th {
+	background-color: var(--background-primary);
+}
+
+body.ptb-headerfill .markdown-rendered table:not(.ptb-t-noheaderfill) th,
+body.ptb-headerfill .cm-table-widget table:not(.ptb-t-noheaderfill) th,
+.markdown-rendered table.ptb-t-headerfill th,
+.cm-table-widget table.ptb-t-headerfill th {
+	background-color: var(--ptb-header-fill, #E3F0FC);
+}
+
+body.ptb-sticky .markdown-rendered table:not(.ptb-t-nosticky) thead th,
+body.ptb-sticky .cm-table-widget table:not(.ptb-t-nosticky) tr:first-child > th,
+.markdown-rendered table.ptb-t-sticky thead th,
+.cm-table-widget table.ptb-t-sticky tr:first-child > th {
+	position: sticky;
+	top: -1px;
+	z-index: 2;
+}
+
+body.ptb-compact .markdown-rendered table:not(.ptb-t-nocompact) td,
+body.ptb-compact .markdown-rendered table:not(.ptb-t-nocompact) th,
+body.ptb-compact .cm-table-widget table:not(.ptb-t-nocompact) td,
+body.ptb-compact .cm-table-widget table:not(.ptb-t-nocompact) th,
+.markdown-rendered table.ptb-t-compact td,
+.markdown-rendered table.ptb-t-compact th,
+.cm-table-widget table.ptb-t-compact td,
+.cm-table-widget table.ptb-t-compact th {
+	padding-top: 1px;
+	padding-bottom: 1px;
+}
+
+/* the type-to-filter row (Reading view). Hidden rows keep their markdown;
+   display:none only hides them on screen. */
+tr.ptb-filter > td {
+	padding: 2px 4px;
+}
+
+input.ptb-flt {
+	width: 100%;
+	min-width: 40px;
+	font-size: 12px;
+	padding: 1px 4px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+input.ptb-flt:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+tr.ptb-fhidden {
+	display: none;
+}
+
+/* the This-table toggles in the panel show the effective state. Six flags
+   don't fit one line in a sidebar — a 3-up grid keeps them readable. */
+.ptb-tflagrow {
+	display: grid;
+	grid-template-columns: 1fr 1fr 1fr;
+	gap: 3px;
+}
+
+button.ptb-tflag {
+	font-size: 12px;
+}
+
+button.ptb-tflag.is-active {
+	background: var(--background-modifier-hover);
+	box-shadow: inset 0 0 0 1.5px var(--interactive-accent);
+}
+
+/* a dot marks a stored per-table override (vs following the global default) */
+button.ptb-tflag.ptb-override::after {
+	content: "•";
+	margin-left: 3px;
+	color: var(--interactive-accent);
+}
+
+.ptb-iconrow {
+	display: flex;
+	gap: 3px;
+	align-items: center;
+}
+
+button.ptb-iconbtn {
+	height: 28px;
+	min-width: 28px;
+	flex: 1;
+	padding: 0 6px;
+	border-radius: 6px;
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	color: var(--text-normal);
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11.5px;
+	font-weight: 600;
+}
+
+button.ptb-iconbtn:hover {
+	background: var(--background-modifier-hover);
+}
+
+button.ptb-iconbtn svg {
+	width: 14px;
+	height: 14px;
+}
+
+.ptb-vsep {
+	width: 1px;
+	height: 16px;
+	background: var(--background-modifier-border);
+	margin: 0 2px;
+}
+
+/* the Format cells… opener is a labeled button under the quick chips so it
+   reads as "opens the full dialog", not another one-click format apply */
+button.ptb-fmtcells {
+	width: 100%;
+	margin-top: 5px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+}
+
+button.ptb-fmtcells .ptb-btnic {
+	display: inline-flex;
+}
+
+button.ptb-fmtcells .ptb-btnic svg {
+	width: 13px;
+	height: 13px;
+}
+
+.ptb-datagrid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 5px;
+}
+
+button.ptb-databtn {
+	height: auto;
+	padding: 6px 8px;
+	border-radius: 7px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	box-shadow: none;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-normal);
+	cursor: pointer;
+}
+
+button.ptb-databtn:hover {
+	background: var(--background-modifier-hover);
+}
+
+.ptb-csv-input {
+	width: 100%;
+	min-height: 180px;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
+
+.ptb-modal-btns {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.ptb-modal-desc {
+	color: var(--text-muted);
+	font-size: 12.5px;
+}
+
+/* live-calc cells get a subtle dotted underline as an affordance
+   (data-sum and span.ptb-sum are older markup formats, still honored) */
+span.ptb[data-calc],
+span.ptb[data-sum],
+span.ptb-sum {
+	border-bottom: 1px dotted var(--text-faint);
+}
+
+/* colors painted onto cell content while its hidden wrapper is being edited */
+.ptb-live {
+	border-radius: 3px;
+	padding: 0 2px;
+}
+
+/* ---------- targeted cell (Reading view) ---------- */
+
+.ptb-target {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+/* ---------- Format cells modal ---------- */
+
+/* floating tool window: dragged by its title, backdrop is click-through */
+.ptb-fmt-grab {
+	cursor: grab;
+	user-select: none;
+}
+
+/* with no dimmed backdrop, floating dialogs need a stronger lift off the page */
+.modal.ptb-fmt-floating {
+	box-shadow: var(--shadow-l), 0 0 0 1px var(--background-modifier-border-hover);
+}
+
+/* every format tab reserves the same space so the dialog never jumps */
+.ptb-fmt-opts {
+	min-height: 214px;
+}
+
+input.ptb-fmt-custom {
+	width: 72px;
+	height: auto;
+	font-size: 12px;
+	padding: 4px 8px;
+}
+
+.ptb-fmt-sticky {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	min-height: 22px;
+	margin-top: 6px;
+	font-size: 12.5px;
+	color: var(--text-muted);
+}
+
+.ptb-fmt-sticky label {
+	cursor: pointer;
+}
+
+.ptb-fmt-sample {
+	font-size: 16px;
+	text-align: center;
+	padding: 10px 8px;
+	margin: 10px 0 4px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	font-variant-numeric: tabular-nums;
+}
+
+.ptb-fmt-sample.is-red {
+	color: #f00;
+}
+
+.ptb-fmt-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 2px 0 8px;
+}
+
+button.ptb-fmt-chip {
+	font-size: 12px;
+	height: auto;
+	padding: 4px 10px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 5px;
+	box-shadow: none;
+	cursor: pointer;
+	font-variant-numeric: tabular-nums;
+}
+
+button.ptb-fmt-chip:hover {
+	border-color: var(--interactive-accent);
+}
+
+/* inset ring keeps the chip's own text color (red negatives) readable when selected */
+button.ptb-fmt-chip.is-active {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent) inset;
+}
+
+button.ptb-fmt-chip.is-red {
+	color: #f00;
+}
+
+/* ---------- fallback fill ----------
+   The plugin normally copies the span's background onto the <td> itself
+   ("lift", marked data-lifted). Until that runs, stretch the span to cover
+   the cell padding so there is no unpainted gutter. */
+
+td > span.ptb[style*="background"]:not([data-lifted]):not(.ptb-hl),
+th > span.ptb[style*="background"]:not([data-lifted]):not(.ptb-hl),
+td > span.ptb-fill:not([data-lifted]),
+th > span.ptb-fill:not([data-lifted]) {
+	display: block;
+	margin: calc(-1 * var(--table-cell-vertical-padding, var(--size-2-2, 4px)))
+		calc(-1 * var(--table-cell-horizontal-padding, var(--size-4-2, 8px)));
+	padding: var(--table-cell-vertical-padding, var(--size-2-2, 4px))
+		var(--table-cell-horizontal-padding, var(--size-4-2, 8px));
+}
+
+/* ---------- cell reference guides (column letters + row numbers) ---------- */
+
+body.ptb-cellrefs .markdown-rendered table:not(.ptb-t-noguides),
+body.ptb-cellrefs .cm-table-widget table:not(.ptb-t-noguides),
+.markdown-rendered table.ptb-t-guides,
+.cm-table-widget table.ptb-t-guides {
+	counter-reset: ptbcol ptbrow;
+	margin-left: 26px;
+}
+
+/* letters: only the table's real first row — the thead row, or the first
+   tbody row when there is no thead (never both) */
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *,
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > * {
+	counter-increment: ptbcol;
+}
+
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *::before,
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *::before {
+	content: counter(ptbcol, upper-alpha);
+	display: block;
+	font-size: 9px;
+	font-weight: 500;
+	line-height: 1.1;
+	text-align: center;
+	color: var(--text-faint);
+	letter-spacing: 0.04em;
+}
+
+/* numbers: every body row (all tbody rows under a thead; skip the header row
+   in thead-less tables), so the first data row is 1 */
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)),
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) {
+	counter-increment: ptbrow;
+}
+
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child,
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child {
+	position: relative;
+}
+
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before,
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before {
+	content: counter(ptbrow);
+	position: absolute;
+	left: -24px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+	text-align: right;
+	font-size: 9px;
+	font-weight: 500;
+	color: var(--text-faint);
+	pointer-events: none;
+}
+
+/* ---------- cell borders ----------
+   Edges live in the span's data-b ("tblr", uppercase = thick) and are painted
+   onto the cell itself; attribute matching is case-sensitive, so "t" and "T"
+   select thin vs thick independently. */
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="t"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="t"]) {
+	border-top: 1px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="b"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="b"]) {
+	border-bottom: 1px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="l"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="l"]) {
+	border-left: 1px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="r"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="r"]) {
+	border-right: 1px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="T"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="T"]) {
+	border-top: 2.5px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="B"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="B"]) {
+	border-bottom: 2.5px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="L"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="L"]) {
+	border-left: 2.5px solid var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="R"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="R"]) {
+	border-right: 2.5px solid var(--text-normal);
+}
+
+/* ---------- text highlight (paints just the text, never lifted to the cell) ---------- */
+
+span.ptb-hl {
+	border-radius: 3px;
+	padding: 0 3px;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+
+/* ---------- in-cell checkboxes rendered from [ ] / [x] ---------- */
+
+input.ptb-cbx {
+	width: 14px;
+	height: 14px;
+	margin: 0 5px 0 0;
+	vertical-align: middle;
+	accent-color: var(--interactive-accent);
+	cursor: pointer;
+}
+
+/* ---------- auto-fit width measurement ---------- */
+
+/* Momentary class applied by Auto-fit: every column shrink-wraps its widest
+   unwrapped content so the JS can read natural column widths off the first
+   row. The !importants beat the inline widths the plugin itself set earlier.
+   The class is on and off again within one task, so it never paints. */
+table.ptb-measure {
+	table-layout: auto !important;
+	width: max-content !important;
+	max-width: none !important;
+}
+
+table.ptb-measure :is(td, th) {
+	width: auto !important;
+	min-width: 0 !important;
+	max-width: none !important;
+	white-space: nowrap !important;
+}
+
+/* the filter row is injected at read time; its inputs must not drive widths */
+table.ptb-measure tr.ptb-filter {
+	display: none !important;
+}
+
+/* ---------- settings tab (tabs + search) ---------- */
+
+.ptb-settings-search {
+	margin: 4px 0 10px;
+}
+
+.ptb-settings-search-input {
+	width: 100%;
+}
+
+.ptb-settings-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px;
+	margin: 2px 0 18px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* the compound selector outranks Obsidian's own settings-area button chrome
+   (a .vertical-tab-content button rule) so the tabs render flat, not as boxes */
+.ptb-settings-tabs button.ptb-settings-tab,
+.ptb-settings-tabs button.ptb-settings-tab:hover,
+.ptb-settings-tabs button.ptb-settings-tab:focus,
+.ptb-settings-tabs button.ptb-settings-tab:focus-visible,
+.ptb-settings-tabs button.ptb-settings-tab:active {
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+	outline: none;
+	margin: 0 0 -1px 0;
+	padding: 7px 14px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	border-bottom: 2px solid transparent;
+	cursor: default;
+	transition: color 120ms ease, border-color 120ms ease;
+}
+
+.ptb-settings-tabs button.ptb-settings-tab:hover {
+	color: var(--text-normal);
+	border-bottom-color: var(--background-modifier-border-hover);
+}
+
+.ptb-settings-tabs button.ptb-settings-tab.is-active {
+	color: var(--text-accent);
+	font-weight: var(--font-semibold);
+	border-bottom-color: var(--interactive-accent);
+}
+
+/* the first heading inside a tab does not need its big top border */
+.ptb-settings-section:first-child .setting-item-heading {
+	border-top: none;
+	padding-top: 0;
+}
+
+/* the little hoverable "what does this do" icon after a setting's name */
+.ptb-setting-help {
+	display: inline-flex;
+	margin-left: 6px;
+	vertical-align: -3px;
+	color: var(--text-faint);
+}
+
+.ptb-setting-help:hover {
+	color: var(--text-muted);
+}
+
+.ptb-setting-help .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+/* the help popover: a soft theme-colored card instead of the native black
+   tooltip; shows instantly on hover, and a click pins it open */
+.ptb-help-pop {
+	position: fixed;
+	z-index: var(--layer-tooltip);
+	max-width: 340px;
+	padding: 8px 11px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+}
+/* ---------------- notices in a light theme ----------------
+   Obsidian paints every notice as a near-black slab. In a dark theme that is
+   just the UI; in a light one it reads as an error box, whatever it says, and
+   a progress count or a to-do total is not an error. Same shape and position,
+   the theme's own surface colors. A notice carrying .pw-self-styled brings its
+   own card (Power Desk's meeting reminder) and is left alone. */
+
+body.theme-light .notice:not(.pw-self-styled) {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 6px 22px rgba(0, 0, 0, 0.14);
+}
+
+body.theme-light .notice:not(.pw-self-styled) a {
+	color: var(--text-accent);
+}

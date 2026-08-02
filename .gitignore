@@ -1,0 +1,15 @@
+# build tooling — recreated any time with `npm install`
+node_modules/
+
+# build output — attached to GitHub releases, not committed
+main.js
+tests.cjs
+*.map
+
+# Obsidian writes plugin settings here when developing inside a vault
+data.json
+
+# editor/OS noise
+.vscode/
+.idea/
+.DS_Store
