@@ -28,6 +28,15 @@
 	cursor: grabbing;
 }
 
+/* The pointer is within a few pixels of a header cell's right edge, so the next
+   drag would resize that column. Applied to the cell itself, which belongs to
+   the rendered table rather than to this plugin, hence the element in the
+   selector: it has to outrank whatever the theme puts on a th. */
+th.ptb-col-edge,
+td.ptb-col-edge {
+	cursor: col-resize;
+}
+
 .ptb-grip {
 	display: flex;
 	align-items: center;
@@ -670,9 +679,33 @@ span.ptb-sum {
 	user-select: none;
 }
 
+/* The backdrop stays in the DOM, because Obsidian hangs Escape and focus
+   handling off it, but it must neither dim the table being edited nor swallow
+   clicks meant for it. */
+.ptb-fmt-backdrop {
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* The container fills the window, so leaving it clickable would make the whole
+   workspace inert while a floating dialog is open. The dialog takes its own
+   events back below. */
+.ptb-fmt-host {
+	pointer-events: none;
+}
+
 /* with no dimmed backdrop, floating dialogs need a stronger lift off the page */
 .modal.ptb-fmt-floating {
 	box-shadow: var(--shadow-l), 0 0 0 1px var(--background-modifier-border-hover);
+	pointer-events: auto;
+}
+
+/* Added the moment the dialog is given coordinates, which is when it stops
+   being centered by the modal container and starts carrying its own position.
+   The coordinates themselves are measured, so they stay inline. */
+.modal.ptb-fmt-placed {
+	position: fixed;
+	margin: 0;
 }
 
 /* every format tab reserves the same space so the dialog never jumps */

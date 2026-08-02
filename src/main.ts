@@ -632,11 +632,11 @@ export default class PowerTablesPlugin extends Plugin {
 			if (this.resizing) return;
 			const edge = this.headerEdgeAt(evt);
 			if (this.edgeHover && this.edgeHover !== edge) {
-				this.edgeHover.style.removeProperty("cursor");
+				this.edgeHover.removeClass("ptb-col-edge");
 				this.edgeHover = null;
 			}
 			if (edge) {
-				edge.style.cursor = "col-resize";
+				edge.addClass("ptb-col-edge");
 				this.edgeHover = edge;
 			}
 		});
@@ -2779,17 +2779,12 @@ class PowerTablesView extends ItemView {
  *  backdrop and drag-by-title, so it can be moved off the table it edits. */
 function floatModal(m: Modal) {
 	const bg = m.containerEl.querySelector(".modal-bg") as HTMLElement | null;
-	if (bg) {
-		bg.style.opacity = "0";
-		bg.style.pointerEvents = "none";
-	}
-	m.containerEl.style.pointerEvents = "none";
-	m.modalEl.style.pointerEvents = "auto";
+	bg?.addClass("ptb-fmt-backdrop");
+	m.containerEl.addClass("ptb-fmt-host");
 	m.modalEl.addClass("ptb-fmt-floating");
 	m.titleEl.addClass("ptb-fmt-grab");
 	const place = (x: number, y: number) => {
-		m.modalEl.style.position = "fixed";
-		m.modalEl.style.margin = "0";
+		m.modalEl.addClass("ptb-fmt-placed");
 		m.modalEl.style.left = Math.max(8, Math.min(x, window.innerWidth - 120)) + "px";
 		m.modalEl.style.top = Math.max(8, Math.min(y, window.innerHeight - 60)) + "px";
 	};
@@ -3279,12 +3274,8 @@ class FormatCellsModal extends Modal {
 	 *  backdrop, draggable by its title, position remembered across opens. */
 	private float() {
 		const bg = this.containerEl.querySelector(".modal-bg") as HTMLElement | null;
-		if (bg) {
-			bg.style.opacity = "0";
-			bg.style.pointerEvents = "none";
-		}
-		this.containerEl.style.pointerEvents = "none";
-		this.modalEl.style.pointerEvents = "auto";
+		bg?.addClass("ptb-fmt-backdrop");
+		this.containerEl.addClass("ptb-fmt-host");
 		this.modalEl.addClass("ptb-fmt-floating");
 		const x = this.plugin.settings.fmtModalX;
 		const y = this.plugin.settings.fmtModalY;
@@ -3311,8 +3302,7 @@ class FormatCellsModal extends Modal {
 	}
 
 	private place(x: number, y: number) {
-		this.modalEl.style.position = "fixed";
-		this.modalEl.style.margin = "0";
+		this.modalEl.addClass("ptb-fmt-placed");
 		this.modalEl.style.left = Math.max(8, Math.min(x, window.innerWidth - 120)) + "px";
 		this.modalEl.style.top = Math.max(8, Math.min(y, window.innerHeight - 60)) + "px";
 	}
