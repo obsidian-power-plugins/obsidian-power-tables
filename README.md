@@ -2,11 +2,12 @@
 
 Excel-grade power tools for Markdown tables in Obsidian: **cell fill and text colors** from a floating toolbar, **live calculations** (sum, average, min, max, count) that recalculate as you type, and **smart sorting** that understands numbers, currency, and dates, all while your tables stay **plain Markdown**.
 
-![A budget table with red and green cell fills on the variance column and a totals row of live sums](docs/images/spend-table.png)
+![A budget table with red and green cell fills on the variance column, currency formatting, Excel-style row numbers and column letters, and a totals row of live sums, with the Power Tables panel open beside it showing the formula bar reading =SUM(D1:D10)](docs/images/power-tables.png)
 
-Cell fills mark the two overspends and the two largest savings. The Total row is
-live: 54080 minus 53535 is the 545 in the variance column, and every figure
-recalculates as the table is edited. The file underneath is still Markdown.
+Fills mark the two overspends and the two largest savings, the figures carry
+currency formatting, and the Total row is live: the formula bar shows the
+selected cell is `=SUM(D1:D10)`, and 54,080.00 minus 53,535.00 is the 545.00 in
+the variance column. Everything on the left is still plain Markdown in the file.
 
 ## Features at a glance
 
@@ -18,13 +19,6 @@ recalculates as the table is edited. The file underneath is still Markdown.
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
 - CSV/Excel import and export, table prettifier, Excel-style cell reference guides
 - Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
-
-![The Power Tables side panel open beside a table, showing the formula bar, fill and text color swatches, number formats, and the data actions](docs/images/toolbar-panel.png)
-
-The panel is the whole surface in one place: a formula bar for the selected
-cell, fill and text swatches, number formats, and the row, column, sort, and
-totals actions. Apply to sets whether a color lands on the cell, the row, or
-the column.
 
 New here? Run the command **Insert demo table** to see most of this working in ten seconds.
 
