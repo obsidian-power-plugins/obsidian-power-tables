@@ -156,3 +156,9 @@ npm test        # unit tests for the table-rewrite logic
 4. For later updates: bump `version` in `manifest.json` and `package.json`, add the entry to `versions.json`, rebuild, and cut a new release with the same three files. Installed users get the update automatically.
 
 Users installing from the community directory only ever download the three release files, never the repo or its build tooling.
+
+## Support
+
+Power Tables is built and maintained by one person. If it earns a place in your
+daily vault, you can [buy me a coffee](https://buymeacoffee.com/powerplugins).
+Nothing in the plugin is held back either way.
