@@ -946,6 +946,42 @@ table.ptb-measure tr.ptb-filter {
 
 /* ---------- settings tab (tabs + search) ---------- */
 
+/* the masthead above the section list: what this is and which build is running.
+   In the declarative tab it fills an emptied setting row, which is why the
+   display is reset; in the fallback it is a plain div and finds its own padding. */
+.ptb-about {
+	display: block;
+}
+
+.ptb-about-standalone {
+	padding: 2px 0 12px;
+}
+
+.ptb-about-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.ptb-about-name {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.ptb-about-version {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-modifier-hover);
+	border-radius: 4px;
+	padding: 1px 6px;
+}
+
+.ptb-about-desc {
+	margin-top: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
 .ptb-settings-search {
 	margin: 4px 0 10px;
 }

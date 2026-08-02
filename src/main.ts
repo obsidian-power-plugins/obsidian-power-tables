@@ -10,6 +10,9 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	type SettingDefinitionItem,
+	type SettingDefinitionPage,
+	type SettingDefinitionRender,
 	TFile,
 	WorkspaceLeaf,
 	debounce,
@@ -3431,6 +3434,16 @@ class FormatCellsModal extends Modal {
 	}
 }
 
+/** One row of the settings tab. `build` is handed a Setting whose name and
+ *  description are already set, so it only adds the controls. Rows are data
+ *  rather than drawing code so the two renderers cannot disagree about what
+ *  the tab holds. */
+type Row = { name: string; desc?: string; help?: string; aliases?: string[]; build?: (s: Setting) => void | (() => void) };
+
+/** One section: a native settings page on Obsidian 1.13 and up, a tab in the
+ *  fallback renderer for older builds. */
+type Page = { id: string; label: string; rows: Row[] };
+
 class PowerTablesSettingTab extends PluginSettingTab {
 	plugin: PowerTablesPlugin;
 	/** Which settings tab is showing; kept across re-renders. */
@@ -3442,6 +3455,9 @@ class PowerTablesSettingTab extends PluginSettingTab {
 	private helpAnchor: HTMLElement | null = null;
 	private helpPinned = false;
 	private helpCleanup: (() => void) | null = null;
+	/** Saving on every keystroke of a palette would write the file constantly.
+	 *  Kept on the tab, not in a render closure, so a redraw mid-edit reuses it. */
+	private readonly savePalette = debounce(() => void this.plugin.saveSettings(), 400, true);
 
 	constructor(app: App, plugin: PowerTablesPlugin) {
 		super(app, plugin);
@@ -3497,277 +3513,159 @@ class PowerTablesSettingTab extends PluginSettingTab {
 		};
 	}
 
+	/** Redraw when the rows themselves change. Obsidian 1.13 rebuilds the tab
+	 *  from getSettingDefinitions(); older builds have only the fallback renderer. */
+	private refresh() {
+		this.closeHelp(); // whatever the popover is anchored to is about to go
+		// update() arrived with the declarative API in 1.13 and minAppVersion is
+		// still 1.7.2, so it is reached through a cast rather than named outright:
+		// an older build has no definitions to rebuild from and redraws instead.
+		const tab = this as unknown as { update?: () => void };
+		if (tab.update) tab.update();
+		else this.renderFallback();
+	}
+
+	/** A small help icon after the setting name carrying the deeper "what does
+	 *  this actually do" explanation; hover shows it instantly, a click pins it
+	 *  open (the desc stays one line). No aria-label here: Obsidian auto-shows
+	 *  its native black tooltip for any labeled element, which doubled up with
+	 *  the popover. */
+	private addHelp(st: Setting, text: string) {
+		const ic = st.nameEl.createSpan({ cls: "ptb-setting-help" });
+		setIcon(ic, "help-circle");
+		ic.addEventListener("mouseenter", () => this.openHelp(ic, text, false));
+		ic.addEventListener("mouseleave", () => {
+			if (!this.helpPinned && this.helpAnchor === ic) this.closeHelp();
+		});
+		ic.addEventListener("click", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			if (this.helpPinned && this.helpAnchor === ic) this.closeHelp();
+			else this.openHelp(ic, text, true);
+		});
+	}
+
+	/** Obsidian 1.13 and up builds the tab from these and never calls display():
+	 *  one native page per section, standing in for the tab bar the fallback
+	 *  draws for older builds.
+	 *
+	 *  Every row renders itself rather than declaring a `control`. A declarative
+	 *  control writes through Obsidian's generic setControlValue, and these
+	 *  settings do more than store a value: they repaint live tables and reopen
+	 *  the panel, so they have to stay on the plugin's own save path. */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		const pages = this.buildPages();
+		const rowsOf = new Map(pages.map((p) => [p.label, p.rows] as const));
+		return [
+			{
+				name: "",
+				searchable: false, // it is a masthead, not a setting
+				render: (s) => {
+					s.settingEl.empty();
+					this.renderAbout(s.settingEl);
+				},
+			},
+			{
+				type: "group",
+				search: {
+					placeholder: "Search settings...",
+					// the entries here are whole sections, so a section stays up when
+					// anything inside it matches. Obsidian's own search box, top left,
+					// reaches the individual settings.
+					match: (def, query) => {
+						const q = query.trim().toLowerCase();
+						if (!q) return true;
+						const has = (v: string | undefined) => (v ?? "").toLowerCase().includes(q);
+						return (rowsOf.get(def.name) ?? []).some(
+							(r) => has(r.name) || has(r.desc) || (r.aliases ?? []).some(has)
+						);
+					},
+				},
+				items: pages.map(
+					(p): SettingDefinitionPage => ({
+						type: "page",
+						name: p.label,
+						items: p.rows.map(
+							(r): SettingDefinitionRender => ({
+								name: r.name,
+								desc: r.desc,
+								// searching the section name still finds its rows, the way
+								// a heading match opened the whole section in the tab bar
+								aliases: [...(r.aliases ?? []), p.label],
+								render: (s) => {
+									// the name and description are Obsidian's to draw and it
+									// rebuilds both on a redraw, so a row only hands back
+									// what it hung on the row element itself
+									const teardown = r.build?.(s);
+									if (r.help) this.addHelp(s, r.help);
+									return teardown;
+								},
+							})
+						),
+					})
+				),
+			},
+		];
+	}
+
+	/** What this plugin is and which build is running, above the section list.
+	 *  Read off the manifest so it cannot drift from the released version. */
+	private renderAbout(el: HTMLElement) {
+		el.addClass("ptb-about");
+		const head = el.createDiv({ cls: "ptb-about-head" });
+		head.createSpan({ cls: "ptb-about-name", text: this.plugin.manifest.name });
+		head.createSpan({ cls: "ptb-about-version", text: "v" + this.plugin.manifest.version });
+		el.createDiv({ cls: "ptb-about-desc", text: this.plugin.manifest.description });
+	}
+
+	/** The pre-1.13 renderer: every section on one page, with a tab bar and a
+	 *  search box of our own because there was no declarative API to hand the
+	 *  work to. Obsidian 1.13 and up ignores this and renders the definitions
+	 *  above instead, so the two only ever differ in how they draw, never in
+	 *  what they draw. */
 	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
+		this.renderFallback();
+	}
+
+	private renderFallback() {
+		const root = this.containerEl;
+		root.empty();
 		this.closeHelp(); // a re-render orphans any popover anchored to the old DOM
 
-		const TABS: { id: string; label: string }[] = [
-			{ id: "panel", label: "Panel" },
-			{ id: "appearance", label: "Appearance" },
-			{ id: "palette", label: "Palette" },
-		];
-		if (!TABS.some((t) => t.id === this.activeTab)) this.activeTab = TABS[0].id;
+		const pages = this.buildPages();
+		if (!pages.some((p) => p.id === this.activeTab)) this.activeTab = pages[0].id;
 
-		const searchWrap = containerEl.createDiv({ cls: "ptb-settings-search" });
+		// the same masthead the declarative tab shows, minus the setting-item
+		// wrapper it gets there
+		this.renderAbout(root.createDiv({ cls: "ptb-about-standalone" }));
+
+		const searchWrap = root.createDiv({ cls: "ptb-settings-search" });
 		const searchInput = searchWrap.createEl("input", { cls: "ptb-settings-search-input" });
 		searchInput.type = "search";
 		searchInput.placeholder = "Search settings...";
 		searchInput.value = this.query;
 
-		const tabBar = containerEl.createDiv({ cls: "ptb-settings-tabs" });
-		const body = containerEl.createDiv({ cls: "ptb-settings-body" });
+		const tabBar = root.createDiv({ cls: "ptb-settings-tabs" });
+		const body = root.createDiv({ cls: "ptb-settings-body" });
 
-		// each section opens a tab-tagged div; the settings that follow render
-		// into it because c points at the current section. Add new settings via
-		// section(), never a bare setHeading, or they escape the tabs.
-		let c: HTMLElement = body;
-		const section = (name: string, tab: string) => {
-			c = body.createDiv({ cls: "ptb-settings-section" });
-			c.dataset.tab = tab;
-			c.dataset.name = name.toLowerCase();
-			new Setting(c).setName(name).setHeading();
-		};
-
-		// a small help icon after the setting name carrying the deeper "what
-		// does this actually do" explanation; hover shows it instantly, a
-		// click pins it open (the desc stays one line)
-		const help = (st: Setting, text: string) => {
-			// no aria-label here: Obsidian auto-shows its native black tooltip
-			// for any labeled element, which doubled up with the popover
-			const ic = st.nameEl.createSpan({ cls: "ptb-setting-help" });
-			setIcon(ic, "help-circle");
-			ic.addEventListener("mouseenter", () => this.openHelp(ic, text, false));
-			ic.addEventListener("mouseleave", () => {
-				if (!this.helpPinned && this.helpAnchor === ic) this.closeHelp();
-			});
-			ic.addEventListener("click", (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				if (this.helpPinned && this.helpAnchor === ic) this.closeHelp();
-				else this.openHelp(ic, text, true);
-			});
-		};
-
-		section("Panel", "panel");
-		new Setting(c)
-			.setName("Panel style")
-			.setDesc("Where the Power Tables panel lives. Only one surface is ever shown; switching closes the other.")
-			.then((s) =>
-				help(
-					s,
-					"The panel is the control surface with the color swatches, number formats, and data tools. Sidebar docks it on the right like Backlinks; Floating makes it a small draggable window you can park beside a table."
-				)
-			)
-			.addDropdown((d) =>
-				d
-					.addOptions({ sidebar: "Sidebar pane", floating: "Floating panel" })
-					.setValue(this.plugin.settings.panelMode)
-					.onChange(async (v) => {
-						this.plugin.settings.panelMode = v as "sidebar" | "floating";
-						await this.plugin.saveSettings();
-						// switch the live surface immediately (openPanel closes the other one)
-						void this.plugin.openPanel();
-					})
-			);
-
-		new Setting(c)
-			.setName("Auto-open panel")
-			.setDesc("Reveal the panel the first time you edit inside a table each session.")
-			.then((s) =>
-				help(
-					s,
-					"The first time you put the cursor inside a table each session, the chosen panel opens itself so the tools are at hand. With this off, open it from the ribbon table icon or the Open panel command."
-				)
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.autoOpenSidebar).onChange(async (v) => {
-					this.plugin.settings.autoOpenSidebar = v;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(c)
-			.setName("Open panel on startup")
-			.then((s) =>
-				help(s, "Opens the panel as soon as Obsidian starts, without waiting for the first table edit or the ribbon icon.")
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.openOnStart).onChange(async (v) => {
-					this.plugin.settings.openOnStart = v;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		section("Appearance", "appearance");
-		new Setting(c)
-			.setName("Cell reference guides")
-			.setDesc("Show Excel-style column letters above and row numbers beside every table. The panel's This-table buttons override it per table.")
-			.then((s) =>
-				help(
-					s,
-					"Paints column letters (A, B, C) above and row numbers beside each table so cell references in formulas like =SUM(B1:B3) are easy to read and write. Purely visual; nothing is stored in the note."
-				)
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.cellRefs).onChange(async (v) => {
-					this.plugin.settings.cellRefs = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			);
-
-		new Setting(c)
-			.setName("Striped rows")
-			.setDesc("Subtly tint alternating table rows. The panel's This-table buttons override it per table.")
-			.then((s) =>
-				help(s, "Tints every other row so wide tables are easier to scan. Purely visual; the note itself never changes.")
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.stripedRows).onChange(async (v) => {
-					this.plugin.settings.stripedRows = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			);
-
-		new Setting(c)
-			.setName("Compact tables")
-			.setDesc("Reduce table cell padding. The panel's This-table buttons override it per table.")
-			.then((s) => help(s, "Cuts cell padding so dense tables take less space and more rows fit on screen."))
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.compactTables).onChange(async (v) => {
-					this.plugin.settings.compactTables = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			);
-
-		new Setting(c)
-			.setName("Header fill")
-			.setDesc("Fill every table's header row with a color. The panel's This-table buttons override it per table.")
-			.then((s) =>
-				help(
-					s,
-					"Paints every table's header row so headers stand out from the data. The color picker sets the fill; the toggle turns the feature on or off."
-				)
-			)
-			.addColorPicker((c) =>
-				c.setValue(this.plugin.settings.headerFill).onChange(async (v) => {
-					this.plugin.settings.headerFill = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.fillHeaders).onChange(async (v) => {
-					this.plugin.settings.fillHeaders = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			);
-
-		new Setting(c)
-			.setName("Header fill in dark mode")
-			.setDesc("Color used for the header fill while the app is in dark mode. Until you change it, dark mode uses the same color as above.")
-			.then((s) =>
-				help(
-					s,
-					"A separate header color used only while Obsidian is in dark mode, so a light fill does not glare there. Until you pick one, dark mode reuses the normal header color."
-				)
-			)
-			.addColorPicker((c) =>
-				c
-					.setValue(this.plugin.settings.headerFillDark || this.plugin.settings.headerFill)
-					.onChange(async (v) => {
-						this.plugin.settings.headerFillDark = v;
-						await this.plugin.saveSettings();
-						this.plugin.applyAppearance();
-					})
-			);
-
-		new Setting(c)
-			.setName("Sticky headers")
-			.setDesc("Keep the header row pinned while a long table scrolls. The panel's This-table buttons override it per table.")
-			.then((s) =>
-				help(s, "Pins the header row to the top of the pane while a long table scrolls beneath it, like frozen panes in a spreadsheet.")
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.stickyHeaders).onChange(async (v) => {
-					this.plugin.settings.stickyHeaders = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			);
-
-		new Setting(c)
-			.setName("Filter row")
-			.setDesc("A type-to-filter box under each column header in Reading view. Filtering only hides rows on screen; the note never changes. The panel's This-table buttons override it per table.")
-			.then((s) =>
-				help(
-					s,
-					"Adds a search box under each column header in Reading view. Rows that do not match every typed filter are hidden on screen, and Esc clears a box. The note itself is never modified."
-				)
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.filterRow).onChange(async (v) => {
-					this.plugin.settings.filterRow = v;
-					await this.plugin.saveSettings();
-					this.plugin.applyAppearance();
-				})
-			);
-
-		new Setting(c)
-			.setName("Hide cell markup while editing")
-			.setDesc("In Live Preview, collapse the <span> wrapper and whole-value **bold** / *italic* / ~~strike~~ markers when a cell is edited, keeping the cell rendered with its colors. Source mode always shows the raw markup.")
-			.then((s) =>
-				help(
-					s,
-					"Colors and formats live in a small <span> wrapper inside each cell's markdown. With this on, Live Preview keeps that wrapper hidden while you edit, so you see the rendered cell instead of raw HTML. Turn it off to always see exactly what is stored."
-				)
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.hideMarkup).onChange(async (v) => {
-					this.plugin.settings.hideMarkup = v;
-					await this.plugin.saveSettings();
-					this.app.workspace.updateOptions();
-				})
-			);
-
-		const save = debounce(() => void this.plugin.saveSettings(), 400, true);
-
-		section("Palette", "palette");
-		new Setting(c)
-			.setName("Palette")
-			.setDesc("The colors offered by the panel's swatch grid. Comma-separated hex values, 8 per row, up to 32. Reopen the panel to see changes.")
-			.then((s) =>
-				help(
-					s,
-					"These are the swatches you click in the panel's Colors section; Fill, Text, and Highlight all draw from this one grid. Enter hex colors separated by commas, like #FFEE00, #0B6BCB. Every 8 colors start a new swatch row: the default set is a row of soft fills, a row of stronger fills, and a row of text colors."
-				)
-			)
-			.addTextArea((ta) =>
-				ta.setValue(this.plugin.settings.palette).onChange((v) => {
-					this.plugin.settings.palette = v;
-					save();
-				})
-			);
-
-		new Setting(c)
-			.setName("Palette (dark mode)")
-			.setDesc("Optional: swatches shown while the app is in dark mode, same format as above. Leave empty to use one palette everywhere.")
-			.then((s) =>
-				help(
-					s,
-					"An optional second palette shown while Obsidian is in dark mode, for colors that would look washed out on a dark background. Same comma-separated hex format, 8 per row. Leave it empty to use the main palette everywhere."
-				)
-			)
-			.addTextArea((ta) =>
-				ta.setValue(this.plugin.settings.paletteDark).onChange((v) => {
-					this.plugin.settings.paletteDark = v;
-					save();
-				})
-			);
+		// one section div per page, tagged with its tab so the tab bar and the
+		// search box below can show and hide whole sections at a time
+		for (const p of pages) {
+			const sec = body.createDiv({ cls: "ptb-settings-section" });
+			sec.dataset.tab = p.id;
+			sec.dataset.name = p.label.toLowerCase();
+			new Setting(sec).setName(p.label).setHeading();
+			// name and description first, then the row's own content: the same
+			// order Obsidian applies a definition in, so a row that appends to
+			// either element lands in the same place under both renderers
+			for (const r of p.rows) {
+				const st = new Setting(sec).setName(r.name);
+				if (r.desc) st.setDesc(r.desc);
+				if (r.aliases?.length) st.settingEl.dataset.ptbAlias = r.aliases.join(" ").toLowerCase();
+				r.build?.(st);
+				if (r.help) this.addHelp(st, r.help);
+			}
+		}
 
 		const setVisible = (el: HTMLElement, v: boolean) => (el.style.display = v ? "" : "none");
 		const applyView = () => {
@@ -3788,7 +3686,7 @@ class PowerTablesSettingTab extends PluginSettingTab {
 				for (const it of items) {
 					const name = it.querySelector(".setting-item-name")?.textContent?.toLowerCase() ?? "";
 					const desc = it.querySelector(".setting-item-description")?.textContent?.toLowerCase() ?? "";
-					const hit = nameHit || name.includes(q) || desc.includes(q);
+					const hit = nameHit || name.includes(q) || desc.includes(q) || (it.dataset.ptbAlias ?? "").includes(q);
 					setVisible(it, hit);
 					if (hit) anyHit = true;
 				}
@@ -3796,12 +3694,12 @@ class PowerTablesSettingTab extends PluginSettingTab {
 			}
 		};
 
-		for (const t of TABS) {
-			const btn = tabBar.createEl("button", { text: t.label, cls: "ptb-settings-tab" });
-			btn.toggleClass("is-active", t.id === this.activeTab);
+		for (const p of pages) {
+			const btn = tabBar.createEl("button", { text: p.label, cls: "ptb-settings-tab" });
+			btn.toggleClass("is-active", p.id === this.activeTab);
 			btn.onclick = () => {
-				if (this.activeTab === t.id) return;
-				this.activeTab = t.id;
+				if (this.activeTab === p.id) return;
+				this.activeTab = p.id;
 				for (const other of Array.from(tabBar.children) as HTMLElement[]) other.toggleClass("is-active", other === btn);
 				applyView();
 			};
@@ -3813,5 +3711,212 @@ class PowerTablesSettingTab extends PluginSettingTab {
 		});
 
 		applyView();
+	}
+
+	/** Every row of the settings tab, in order, as plain data: the one source
+	 *  both renderers draw from, so they cannot drift apart. */
+	private buildPages(): Page[] {
+		const panel: Row[] = [];
+		const appearance: Row[] = [];
+		const palette: Row[] = [];
+
+		panel.push({
+			name: "Panel style",
+			desc: "Where the Power Tables panel lives. Only one surface is ever shown; switching closes the other.",
+			help: "The panel is the control surface with the color swatches, number formats, and data tools. Sidebar docks it on the right like Backlinks; Floating makes it a small draggable window you can park beside a table.",
+			build: (s) => {
+				s.addDropdown((d) =>
+					d
+						.addOptions({ sidebar: "Sidebar pane", floating: "Floating panel" })
+						.setValue(this.plugin.settings.panelMode)
+						.onChange(async (v) => {
+							this.plugin.settings.panelMode = v as "sidebar" | "floating";
+							await this.plugin.saveSettings();
+							// switch the live surface immediately (openPanel closes the other one)
+							void this.plugin.openPanel();
+						})
+				);
+			},
+		});
+		panel.push({
+			name: "Auto-open panel",
+			desc: "Reveal the panel the first time you edit inside a table each session.",
+			help: "The first time you put the cursor inside a table each session, the chosen panel opens itself so the tools are at hand. With this off, open it from the ribbon table icon or the Open panel command.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.autoOpenSidebar).onChange(async (v) => {
+						this.plugin.settings.autoOpenSidebar = v;
+						await this.plugin.saveSettings();
+					})
+				);
+			},
+		});
+		panel.push({
+			name: "Open panel on startup",
+			help: "Opens the panel as soon as Obsidian starts, without waiting for the first table edit or the ribbon icon.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.openOnStart).onChange(async (v) => {
+						this.plugin.settings.openOnStart = v;
+						await this.plugin.saveSettings();
+					})
+				);
+			},
+		});
+
+		appearance.push({
+			name: "Cell reference guides",
+			desc: "Show Excel-style column letters above and row numbers beside every table. The panel's This-table buttons override it per table.",
+			help: "Paints column letters (A, B, C) above and row numbers beside each table so cell references in formulas like =SUM(B1:B3) are easy to read and write. Purely visual; nothing is stored in the note.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.cellRefs).onChange(async (v) => {
+						this.plugin.settings.cellRefs = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Striped rows",
+			desc: "Subtly tint alternating table rows. The panel's This-table buttons override it per table.",
+			help: "Tints every other row so wide tables are easier to scan. Purely visual; the note itself never changes.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.stripedRows).onChange(async (v) => {
+						this.plugin.settings.stripedRows = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Compact tables",
+			desc: "Reduce table cell padding. The panel's This-table buttons override it per table.",
+			help: "Cuts cell padding so dense tables take less space and more rows fit on screen.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.compactTables).onChange(async (v) => {
+						this.plugin.settings.compactTables = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Header fill",
+			desc: "Fill every table's header row with a color. The panel's This-table buttons override it per table.",
+			help: "Paints every table's header row so headers stand out from the data. The color picker sets the fill; the toggle turns the feature on or off.",
+			build: (s) => {
+				s.addColorPicker((cp) =>
+					cp.setValue(this.plugin.settings.headerFill).onChange(async (v) => {
+						this.plugin.settings.headerFill = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.fillHeaders).onChange(async (v) => {
+						this.plugin.settings.fillHeaders = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Header fill in dark mode",
+			desc: "Color used for the header fill while the app is in dark mode. Until you change it, dark mode uses the same color as above.",
+			help: "A separate header color used only while Obsidian is in dark mode, so a light fill does not glare there. Until you pick one, dark mode reuses the normal header color.",
+			build: (s) => {
+				s.addColorPicker((cp) =>
+					cp
+						.setValue(this.plugin.settings.headerFillDark || this.plugin.settings.headerFill)
+						.onChange(async (v) => {
+							this.plugin.settings.headerFillDark = v;
+							await this.plugin.saveSettings();
+							this.plugin.applyAppearance();
+						})
+				);
+			},
+		});
+		appearance.push({
+			name: "Sticky headers",
+			desc: "Keep the header row pinned while a long table scrolls. The panel's This-table buttons override it per table.",
+			help: "Pins the header row to the top of the pane while a long table scrolls beneath it, like frozen panes in a spreadsheet.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.stickyHeaders).onChange(async (v) => {
+						this.plugin.settings.stickyHeaders = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Filter row",
+			desc: "A type-to-filter box under each column header in Reading view. Filtering only hides rows on screen; the note never changes. The panel's This-table buttons override it per table.",
+			help: "Adds a search box under each column header in Reading view. Rows that do not match every typed filter are hidden on screen, and Esc clears a box. The note itself is never modified.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.filterRow).onChange(async (v) => {
+						this.plugin.settings.filterRow = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Hide cell markup while editing",
+			desc: "In Live Preview, collapse the <span> wrapper and whole-value **bold** / *italic* / ~~strike~~ markers when a cell is edited, keeping the cell rendered with its colors. Source mode always shows the raw markup.",
+			help: "Colors and formats live in a small <span> wrapper inside each cell's markdown. With this on, Live Preview keeps that wrapper hidden while you edit, so you see the rendered cell instead of raw HTML. Turn it off to always see exactly what is stored.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.hideMarkup).onChange(async (v) => {
+						this.plugin.settings.hideMarkup = v;
+						await this.plugin.saveSettings();
+						this.app.workspace.updateOptions();
+					})
+				);
+			},
+		});
+
+		palette.push({
+			name: "Palette",
+			desc: "The colors offered by the panel's swatch grid. Comma-separated hex values, 8 per row, up to 32. Reopen the panel to see changes.",
+			help: "These are the swatches you click in the panel's Colors section; Fill, Text, and Highlight all draw from this one grid. Enter hex colors separated by commas, like #FFEE00, #0B6BCB. Every 8 colors start a new swatch row: the default set is a row of soft fills, a row of stronger fills, and a row of text colors.",
+			build: (s) => {
+				s.addTextArea((ta) =>
+					ta.setValue(this.plugin.settings.palette).onChange((v) => {
+						this.plugin.settings.palette = v;
+						this.savePalette();
+					})
+				);
+			},
+		});
+		palette.push({
+			name: "Palette (dark mode)",
+			desc: "Optional: swatches shown while the app is in dark mode, same format as above. Leave empty to use one palette everywhere.",
+			help: "An optional second palette shown while Obsidian is in dark mode, for colors that would look washed out on a dark background. Same comma-separated hex format, 8 per row. Leave it empty to use the main palette everywhere.",
+			build: (s) => {
+				s.addTextArea((ta) =>
+					ta.setValue(this.plugin.settings.paletteDark).onChange((v) => {
+						this.plugin.settings.paletteDark = v;
+						this.savePalette();
+					})
+				);
+			},
+		});
+
+		return [
+			{ id: "panel", label: "Panel", rows: panel },
+			{ id: "appearance", label: "Appearance", rows: appearance },
+			{ id: "palette", label: "Palette", rows: palette },
+		];
 	}
 }
