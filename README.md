@@ -2,6 +2,12 @@
 
 Excel-grade power tools for Markdown tables in Obsidian: **cell fill and text colors** from a floating toolbar, **live calculations** (sum, average, min, max, count) that recalculate as you type, and **smart sorting** that understands numbers, currency, and dates, all while your tables stay **plain Markdown**.
 
+![A budget table with red and green cell fills on the variance column and a totals row of live sums](docs/images/spend-table.png)
+
+Cell fills mark the two overspends and the two largest savings. The Total row is
+live: 54080 minus 53535 is the 545 in the variance column, and every figure
+recalculates as the table is edited. The file underneath is still Markdown.
+
 ## Features at a glance
 
 - Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column
