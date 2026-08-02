@@ -19,6 +19,13 @@ recalculates as the table is edited. The file underneath is still Markdown.
 - CSV/Excel import and export, table prettifier, Excel-style cell reference guides
 - Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
 
+![The Power Tables side panel open beside a table, showing the formula bar, fill and text color swatches, number formats, and the data actions](docs/images/toolbar-panel.png)
+
+The panel is the whole surface in one place: a formula bar for the selected
+cell, fill and text swatches, number formats, and the row, column, sort, and
+totals actions. Apply to sets whether a color lands on the cell, the row, or
+the column.
+
 New here? Run the command **Insert demo table** to see most of this working in ten seconds.
 
 ## How it stores colors
