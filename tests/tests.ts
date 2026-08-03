@@ -72,7 +72,7 @@ import {
 	shadeVariants,
 	tableFromRows,
 	mergeForSave,
-} from "./cells";
+} from "../src/cells";
 
 let failures = 0;
 
