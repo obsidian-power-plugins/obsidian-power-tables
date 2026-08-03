@@ -2,6 +2,8 @@
 
 Excel-grade power tools for Markdown tables in Obsidian: **cell fill and text colors** from a floating toolbar, **live calculations** (sum, average, min, max, count) that recalculate as you type, and **smart sorting** that understands numbers, currency, and dates, all while your tables stay **plain Markdown**.
 
+[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="200">](https://buymeacoffee.com/powerplugins)
+
 ![A budget table with red and green cell fills on the variance column, currency formatting, Excel-style row numbers and column letters, and a totals row of live sums, with the Power Tables panel open beside it showing the formula bar reading =SUM(D1:D10)](docs/images/power-tables.png)
 
 Fills mark the two overspends and the two largest savings, the figures carry
@@ -152,5 +154,3 @@ Users installing from the community directory only ever download the three relea
 Power Tables is built and maintained by one person. If it earns a place in your
 daily vault, you can [buy me a coffee](https://buymeacoffee.com/powerplugins).
 Nothing in the plugin is held back either way.
-
-[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="200">](https://buymeacoffee.com/powerplugins)
