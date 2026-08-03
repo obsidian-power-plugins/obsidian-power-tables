@@ -1,6 +1,6 @@
 {
 	"name": "powertables",
-	"version": "1.20.9",
+	"version": "1.20.10",
 	"description": "Obsidian plugin: color, calculate, and sort Markdown tables in place, with everything stored as plain Markdown",
 	"main": "main.js",
 	"type": "module",
