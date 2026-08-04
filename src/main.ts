@@ -35,7 +35,6 @@ import {
 	EditPlan,
 	FMT_DEFAULTS,
 	FmtSpec,
-	FORMULA_FUNCTIONS,
 	cellTextParts,
 	applyCompletion,
 	completionsAt,
@@ -255,7 +254,7 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 			 * value, keep an empty cursor inside the content.
 			 */
 			private clampCursor(view: EditorView) {
-				if (!view.dom.closest("td, th")) return;
+				if (!view.dom.closest<HTMLTableCellElement>("td, th")) return;
 				window.requestAnimationFrame(() => {
 					if (!view.dom.isConnected) return;
 					const doc = view.state.doc.toString();
@@ -291,8 +290,8 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 				// where hiding matters most. Only bail on Source mode when the
 				// editor is NOT inside a table cell; the real Source-mode view has
 				// no table widgets, so it always stays raw.
-				const lp = view.state.field(editorLivePreviewField, false) as boolean | undefined;
-				const inTableCell = view.dom.closest(".cm-table-widget, td, th") != null;
+				const lp = view.state.field(editorLivePreviewField, false);
+				const inTableCell = view.dom.closest<HTMLElement>(".cm-table-widget, td, th") != null;
 				if (!plugin.settings.hideMarkup || (lp === false && !inTableCell)) {
 					return { deco: decoB.finish(), hidden: hideB.finish() };
 				}
@@ -310,7 +309,7 @@ function buildTagHider(plugin: PowerTablesPlugin) {
 				// markers like the span tags, but only in cell sub-editors, where the
 				// document IS one cell's content so a whole-doc wrap is unambiguous.
 				// The main editor keeps Obsidian's normal marker behavior.
-				const cellDoc = view.dom.closest("td, th") != null;
+				const cellDoc = view.dom.closest<HTMLTableCellElement>("td, th") != null;
 				const docLen = view.state.doc.length;
 				if (cellDoc && docLen <= 10000) {
 					const whole = view.state.doc.toString();
@@ -561,7 +560,7 @@ export default class PowerTablesPlugin extends Plugin {
 					const doc = ev.state.doc.toString();
 					rows.push({
 						when,
-						inTd: el.closest("td, th") != null,
+						inTd: el.closest<HTMLTableCellElement>("td, th") != null,
 						lp: ev.state.field(editorLivePreviewField, false) ?? "missing",
 						extensionInstalled: ev.state.facet(hiderInstalled),
 						pluginActive: inst != null,
@@ -605,7 +604,7 @@ export default class PowerTablesPlugin extends Plugin {
 			const tables = el.querySelectorAll("table");
 			if (!tables.length) return;
 			tables.forEach((table) => {
-				const info = ctx.getSectionInfo(table as HTMLElement) ?? ctx.getSectionInfo(el);
+				const info = ctx.getSectionInfo(table) ?? ctx.getSectionInfo(el);
 				if (info) {
 					table.setAttribute("data-ptb-start", String(info.lineStart));
 					table.setAttribute("data-ptb-path", ctx.sourcePath);
@@ -613,8 +612,8 @@ export default class PowerTablesPlugin extends Plugin {
 				table.querySelectorAll("td span.ptb, th span.ptb").forEach((s) => this.lift(s as HTMLElement));
 				// per-table appearance classes are wiped with every re-render;
 				// re-apply here so Reading view never flashes the global look
-				this.applyFlagClasses(table as HTMLElement);
-				this.renderFilterRow(table as HTMLTableElement);
+				this.applyFlagClasses(table);
+				this.renderFilterRow(table);
 			});
 		});
 
@@ -642,7 +641,7 @@ export default class PowerTablesPlugin extends Plugin {
 				evt.preventDefault();
 				evt.stopPropagation();
 				if (evt.button !== 0) return;
-				const cell = box.closest("td, th") as HTMLTableCellElement | null;
+				const cell = box.closest<HTMLTableCellElement>("td, th");
 				if (!cell) return;
 				box.checked = !box.checked;
 				const checked = box.checked;
@@ -732,13 +731,13 @@ export default class PowerTablesPlugin extends Plugin {
 			(evt) => {
 				if (!(evt.target instanceof Element)) return;
 				if (evt.target.closest(".ptb-panel, .ptb-toolbar, .ptb-tablebar, .ptb-stats, .menu, .modal")) return;
-				if (evt.target.closest(".cm-table-widget, td, th")) this.dropStickySelection();
+				if (evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.dropStickySelection();
 				else this.leaveTableContext();
 			},
 			{ capture: true }
 		);
 		this.registerDomEvent(document, "focusin", (evt) => {
-			if (evt.target instanceof Element && evt.target.closest(".cm-table-widget, td, th")) this.updatePanels();
+			if (evt.target instanceof Element && evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.updatePanels();
 		});
 		this.registerPenHandlers();
 		this.registerDomEvent(document, "keyup", (evt) => {
@@ -854,7 +853,7 @@ export default class PowerTablesPlugin extends Plugin {
 				ev.dispatch({ effects: StateEffect.appendConfig.of(this.hiderExtension) });
 				return;
 			}
-			if (el.closest("td, th") && ev.state.doc.length < 200000) {
+			if (el.closest<HTMLTableCellElement>("td, th") && ev.state.doc.length < 200000) {
 				const inst = ev.plugin(this.hiderView);
 				if (inst && inst.deco.size === 0 && ev.state.doc.toString().includes('<span class="ptb')) {
 					ev.dispatch({ effects: ptbPoke.of(null) });
@@ -863,7 +862,7 @@ export default class PowerTablesPlugin extends Plugin {
 		});
 		document.body.querySelectorAll("td span.ptb, th span.ptb").forEach((s) => this.lift(s as HTMLElement));
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
-			const s = cell.querySelector("span.ptb") as HTMLElement | null;
+			const s = cell.querySelector<HTMLElement>("span.ptb");
 			if (!s || !s.style.backgroundColor || s.classList.contains("ptb-hl")) {
 				(cell as HTMLElement).style.removeProperty("background-color");
 				cell.removeAttribute("data-ptb");
@@ -887,7 +886,7 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	private applyTableFlags() {
-		document.body.querySelectorAll("table").forEach((tbl) => this.applyFlagClasses(tbl as HTMLElement));
+		document.body.querySelectorAll("table").forEach((tbl) => this.applyFlagClasses(tbl));
 	}
 
 	/* ---------------- filter row (read-time, never touches the file) ---------------- */
@@ -954,7 +953,7 @@ export default class PowerTablesPlugin extends Plugin {
 	/** Copy a span's background onto its <td>/<th> so the whole cell fills, like a
 	 *  spreadsheet, unless it's a text highlight (ptb-hl), which stays on the text. */
 	private lift(span: HTMLElement) {
-		const cell = span.closest("td, th") as HTMLElement | null;
+		const cell = span.closest<HTMLTableCellElement>("td, th");
 		if (!cell) return;
 		if (span.classList.contains("ptb-hl")) return;
 		const bg = span.style.backgroundColor;
@@ -1016,7 +1015,7 @@ export default class PowerTablesPlugin extends Plugin {
 			if (!node?.nodeValue) return;
 			const m = node.nodeValue.match(CHECKBOX_RE);
 			if (!m) return;
-			const box = document.createElement("input");
+			const box = createEl("input");
 			box.type = "checkbox";
 			box.className = "ptb-cbx";
 			box.checked = m[1] !== " ";
@@ -1031,16 +1030,16 @@ export default class PowerTablesPlugin extends Plugin {
 	 *  that row itself, which map to no markdown line. */
 	private realRowIndex(tr: HTMLTableRowElement): number | null {
 		if (tr.hasClass("ptb-filter")) return null;
-		const flt = tr.closest("table")?.querySelector("tr.ptb-filter") as HTMLTableRowElement | null;
+		const flt = tr.closest<HTMLTableElement>("table")?.querySelector("tr.ptb-filter") as HTMLTableRowElement | null;
 		return flt && flt.rowIndex < tr.rowIndex ? tr.rowIndex - 1 : tr.rowIndex;
 	}
 
 	private targetFromCell(cell: HTMLTableCellElement): ClickTarget | null {
-		const table = cell.closest("table");
+		const table = cell.closest<HTMLTableElement>("table");
 		const start = table?.getAttribute("data-ptb-start");
 		const path = table?.getAttribute("data-ptb-path");
 		if (!table || start == null || !path) return null;
-		const tr = cell.closest("tr") as HTMLTableRowElement | null;
+		const tr = cell.closest<HTMLTableRowElement>("tr");
 		if (!tr) return null;
 		const idx = this.realRowIndex(tr);
 		if (idx == null) return null;
@@ -1054,7 +1053,7 @@ export default class PowerTablesPlugin extends Plugin {
 	targetTableEl(): HTMLElement | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view) return null;
-		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor as unknown);
+		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor);
 		const tc = (em as { tableCell?: { table?: { tableEl?: HTMLElement | null } } } | null)?.tableCell;
 		return tc?.table?.tableEl ?? null;
 	}
@@ -1069,7 +1068,7 @@ export default class PowerTablesPlugin extends Plugin {
 	 * cannot be matched, this returns null and the click just behaves normally.
 	 */
 	refFromDomCell(cell: HTMLTableCellElement, target: CellTarget, snapshot: HTMLElement | null): string | null {
-		const table = cell.closest("table") as HTMLTableElement | null;
+		const table = cell.closest<HTMLTableElement>("table");
 		if (!table) return null;
 		if (snapshot) {
 			if (table !== snapshot) return null;
@@ -1080,7 +1079,7 @@ export default class PowerTablesPlugin extends Plugin {
 			const start = parseInt(startAttr, 10);
 			if (target.line < start || target.line > start + table.rows.length) return null;
 		}
-		const tr = cell.closest("tr") as HTMLTableRowElement | null;
+		const tr = cell.closest<HTMLTableRowElement>("tr");
 		if (!tr) return null;
 		const idx = this.realRowIndex(tr);
 		if (idx == null) return null;
@@ -1090,7 +1089,7 @@ export default class PowerTablesPlugin extends Plugin {
 	private onDocClick(evt: MouseEvent) {
 		if (!(evt.target instanceof Element)) return;
 		if (evt.target.closest(".ptb-toolbar") || evt.target.closest(".ptb-panel")) return;
-		const cell = evt.target.closest("td, th") as HTMLTableCellElement | null;
+		const cell = evt.target.closest<HTMLTableCellElement>("td, th");
 		if (!cell || !cell.closest(".markdown-rendered")) return;
 		const tgt = this.targetFromCell(cell);
 		if (tgt) {
@@ -1121,8 +1120,8 @@ export default class PowerTablesPlugin extends Plugin {
 			}
 		});
 		if (!path || !hostEl) return null;
-		const table = cell.closest("table");
-		const tr = cell.closest("tr") as HTMLTableRowElement | null;
+		const table = cell.closest<HTMLTableElement>("table");
+		const tr = cell.closest<HTMLTableRowElement>("tr");
 		if (!table || !tr) return null;
 		const tableIdx = Array.from((hostEl as HTMLElement).querySelectorAll("table")).indexOf(table);
 		if (tableIdx < 0) return null;
@@ -1158,7 +1157,7 @@ export default class PowerTablesPlugin extends Plugin {
 
 	private onCellContextMenu(evt: MouseEvent) {
 		if (!(evt.target instanceof Element)) return;
-		const cell = evt.target.closest("td, th") as HTMLTableCellElement | null;
+		const cell = evt.target.closest<HTMLTableCellElement>("td, th");
 		if (!cell || !cell.closest(".markdown-rendered")) return;
 		const tgt = this.targetFromCell(cell);
 		if (tgt) {
@@ -1356,7 +1355,7 @@ export default class PowerTablesPlugin extends Plugin {
 
 	/** The Live Preview table widget's focused cell, in doc coordinates. */
 	private widgetCellAt(view: MarkdownView): { line: number; col: number } | null {
-		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor as unknown);
+		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor);
 		const tc = (
 			em as {
 				tableCell?: { table?: { tableEl?: HTMLElement | null }; cell?: { row?: number; col?: number } };
@@ -1429,7 +1428,7 @@ export default class PowerTablesPlugin extends Plugin {
 		const recent = this.app.workspace.getMostRecentLeaf();
 		const view = active ?? (recent?.view instanceof MarkdownView ? recent.view : null);
 		if (!view || !view.file || view.getMode() === "preview") return null;
-		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor as unknown);
+		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor);
 		const table = (
 			em as { tableCell?: { table?: { tableEl?: HTMLElement | null; selectedCells?: unknown[] } } } | null
 		)?.tableCell?.table;
@@ -1646,9 +1645,9 @@ export default class PowerTablesPlugin extends Plugin {
 		// phones never apply widths, so dragging one out would just snap back
 		if (Platform.isPhone) return null;
 		if (!(evt.target instanceof Element)) return null;
-		const cell = evt.target.closest("th, td") as HTMLElement | null;
+		const cell = evt.target.closest<HTMLTableCellElement>("th, td");
 		if (!cell) return null;
-		const tr = cell.closest("tr") as HTMLTableRowElement | null;
+		const tr = cell.closest<HTMLTableRowElement>("tr");
 		if (!tr || tr.rowIndex !== 0) return null;
 		if (!cell.closest(".markdown-rendered") && !cell.closest(".cm-table-widget")) return null;
 		const r = cell.getBoundingClientRect();
@@ -1682,7 +1681,7 @@ export default class PowerTablesPlugin extends Plugin {
 
 	/** Auto-fit a single column from a double-click on its header's resize edge. */
 	private async autoFitColumn(cell: HTMLTableCellElement) {
-		const tbl = cell.closest("table") as HTMLTableElement | null;
+		const tbl = cell.closest<HTMLTableElement>("table");
 		const w = tbl ? this.measureColumnWidths(tbl)[cell.cellIndex] : undefined;
 		if (w == null) return;
 		const tgt = this.targetFromCell(cell) ?? (await this.fallbackTargetFromCell(cell));
@@ -1725,11 +1724,11 @@ export default class PowerTablesPlugin extends Plugin {
 		this.app.workspace.iterateAllLeaves((leaf) => {
 			const v = leaf.view;
 			if (found || !(v instanceof MarkdownView) || v.file?.path !== t.path || v.getMode() === "preview") return;
-			const em = (v as unknown as { editMode?: unknown }).editMode ?? (v.editor as unknown);
+			const em = (v as unknown as { editMode?: unknown }).editMode ?? (v.editor);
 			const cm = (em as { cm?: EditorView } | null)?.cm;
 			if (!cm) return;
 			for (const el of Array.from(v.containerEl.querySelectorAll("table"))) {
-				const tbl = el as HTMLTableElement;
+				const tbl = el;
 				if (!tbl.closest(".cm-table-widget") || !tbl.getBoundingClientRect().width) continue;
 				try {
 					if (contains(tbl, cm.state.doc.lineAt(cm.posAtDOM(tbl)).number - 1)) {
@@ -1798,7 +1797,7 @@ export default class PowerTablesPlugin extends Plugin {
 		for (const view of views) {
 			if (view.file?.path !== path || view.getMode() === "preview") continue;
 			// Undocumented internals, feature-detect every step and fall through cleanly.
-			const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor as unknown);
+			const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor);
 			const table = (
 				em as {
 					tableCell?: {
@@ -1895,8 +1894,8 @@ export default class PowerTablesPlugin extends Plugin {
 	 * and column come from the DOM.
 	 */
 	private docCellFromDom(cell: HTMLTableCellElement): { path: string; line: number; col: number } | null {
-		const tr = cell.closest("tr") as HTMLTableRowElement | null;
-		const table = cell.closest("table");
+		const tr = cell.closest<HTMLTableRowElement>("tr");
+		const table = cell.closest<HTMLTableElement>("table");
 		if (!tr || !table) return null;
 		const idx = this.realRowIndex(tr);
 		if (idx == null) return null;
@@ -1945,8 +1944,8 @@ export default class PowerTablesPlugin extends Plugin {
 		let drawing = false;
 		const at = (e: PointerEvent) => {
 			if (!(e.target instanceof Element)) return null;
-			const cell = e.target.closest("td, th") as HTMLTableCellElement | null;
-			if (!cell || !cell.closest("table")) return null;
+			const cell = e.target.closest<HTMLTableCellElement>("td, th");
+			if (!cell || !cell.closest<HTMLTableElement>("table")) return null;
 			const doc = this.docCellFromDom(cell);
 			if (!doc) return null;
 			const edge = this.pen?.tool === "border" ? this.nearestEdge(cell, e.clientX, e.clientY) : undefined;
@@ -3109,7 +3108,10 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.adoptSettings(Object.assign({}, DEFAULT_SETTINGS, await this.loadData()));
+		// loadData is untyped by the API; name what we expect back rather than
+		// letting an any spread over every setting
+		const saved = (await this.loadData()) as Partial<PowerTablesSettings> | null;
+		this.adoptSettings(Object.assign({}, DEFAULT_SETTINGS, saved ?? {}));
 		this.baseline = structuredClone(this.settings);
 	}
 
@@ -3216,7 +3218,7 @@ class PanelUI {
 	private onPointDown = (evt: MouseEvent) => {
 		if (!(evt.target instanceof Element)) return;
 		if (evt.target.closest(".ptb-panel") || evt.target.closest(".ptb-toolbar")) return;
-		const cell = evt.target.closest("td, th") as HTMLTableCellElement | null;
+		const cell = evt.target.closest<HTMLTableCellElement>("td, th");
 		if (!cell || !this.fxTarget || !this.pointReady()) return;
 		const ref = this.plugin.refFromDomCell(cell, this.fxTarget, this.fxTableEl);
 		if (!ref) return;
@@ -3517,7 +3519,7 @@ class PanelUI {
 		none.createSpan({ cls: "ptb-noicon" });
 		none.createSpan({ text: "No color" });
 		this.guard(none);
-		none.addEventListener("click", (e) => this.apply(null, e));
+		none.addEventListener("click", (e) => this.applyPick(null, e));
 		const more = items.createEl("button", { cls: "ptb-item" });
 		const moreIcon = more.createSpan({ cls: "ptb-item-icon" });
 		setIcon(moreIcon, "palette");
@@ -3663,7 +3665,7 @@ class PanelUI {
 		return b;
 	}
 
-	private apply(color: string | null, evt: MouseEvent | null) {
+	private applyPick(color: string | null, evt: MouseEvent | null) {
 		const patch: Patch =
 			this.mode === "fill" ? { bg: color } : this.mode === "text" ? { fg: color } : { bg: color, hl: true };
 		this.plugin.applyFromUI(patch, evt);
@@ -3676,14 +3678,14 @@ class PanelUI {
 		});
 		b.style.backgroundColor = c;
 		this.guard(b);
-		b.addEventListener("click", (e) => this.apply(c, e));
+		b.addEventListener("click", (e) => this.applyPick(c, e));
 	}
 
 	private makeCustomInput(parent: HTMLElement): HTMLInputElement {
 		const inp = parent.createEl("input", { cls: "ptb-hidden-color", type: "color" });
 		inp.addEventListener("change", () => {
 			this.setPickerOpen(false);
-			this.apply(inp.value, null);
+			this.applyPick(inp.value, null);
 		});
 		return inp;
 	}
@@ -3882,7 +3884,7 @@ class PowerTablesView extends ItemView {
 /** Turn a dialog into a floating tool window: see-through, click-through
  *  backdrop and drag-by-title, so it can be moved off the table it edits. */
 function floatModal(m: Modal) {
-	const bg = m.containerEl.querySelector(".modal-bg") as HTMLElement | null;
+	const bg = m.containerEl.querySelector<HTMLElement>(".modal-bg");
 	bg?.addClass("ptb-fmt-backdrop");
 	m.containerEl.addClass("ptb-fmt-host");
 	m.modalEl.addClass("ptb-fmt-floating");
@@ -4414,7 +4416,7 @@ class FormatCellsModal extends Modal {
 	/** Turn the modal into a floating tool window: transparent click-through
 	 *  backdrop, draggable by its title, position remembered across opens. */
 	private float() {
-		const bg = this.containerEl.querySelector(".modal-bg") as HTMLElement | null;
+		const bg = this.containerEl.querySelector<HTMLElement>(".modal-bg");
 		bg?.addClass("ptb-fmt-backdrop");
 		this.containerEl.addClass("ptb-fmt-host");
 		this.modalEl.addClass("ptb-fmt-floating");
@@ -4811,8 +4813,8 @@ class PowerTablesSettingTab extends PluginSettingTab {
 			setVisible(tabBar, !q);
 			for (const sec of Array.from(body.children) as HTMLElement[]) {
 				const items = Array.from(
-					sec.querySelectorAll(":scope > .setting-item:not(.setting-item-heading)")
-				) as HTMLElement[];
+					sec.querySelectorAll<HTMLElement>(":scope > .setting-item:not(.setting-item-heading)")
+				);
 				if (!q) {
 					for (const it of items) setVisible(it, true);
 					setVisible(sec, sec.dataset.tab === this.activeTab);

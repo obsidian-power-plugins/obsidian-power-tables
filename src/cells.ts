@@ -1584,7 +1584,7 @@ export function planBorders(lines: string[], target: CellTargetLoc, action: Bord
 			} else if (STACKED[action]) {
 				// a top and/or a bottom on the selection's outer rows, each with
 				// its own weight
-				const spec = STACKED[action]!;
+				const spec = STACKED[action];
 				const adds: { edge: Edge; weight: EdgeWeight }[] = [];
 				if (spec.top && firstRow) adds.push({ edge: "top", weight: spec.top });
 				if (spec.bottom && lastRow) adds.push({ edge: "bottom", weight: spec.bottom });
@@ -1712,7 +1712,9 @@ export function planTotalsRow(lines: string[], target: CellTargetLoc): (EditPlan
 	const hr = parseRow(lines[start]);
 	if (!hr || hr.isDelim) return null;
 	const none = { edits: [], cursorLine: ln, cursorCh: cursorForCol(lines[ln], target.col), added: 0 };
-	const numeric: boolean[] = new Array(hr.cellCount).fill(false);
+	// Array(n).fill() is typed any[]; build it with a factory so the element
+	// type is real
+	const numeric: boolean[] = Array.from({ length: hr.cellCount }, () => false);
 	for (let i = delimIdx + 1; i <= end; i++) {
 		const r = parseRow(lines[i]);
 		if (!r || r.isDelim) continue;
