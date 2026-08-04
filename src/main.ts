@@ -132,6 +132,13 @@ type Rule = { op: RuleOp; value: string; bg: string | null; fg: string | null };
 
 const VIEW_TYPE_PT = "power-tables-view";
 
+/** How far either side of a column boundary still counts as grabbing it. The
+ *  band is this wide on both sides of the line, so a divider is about 12px of
+ *  target rather than the 6px inside a single cell it used to be. Wide enough
+ *  to hit on a scaled display, narrow enough that an ordinary click into a
+ *  header cell is still an ordinary click. */
+const EDGE_GRAB = 6;
+
 function colLetter(n: number): string {
 	let s = "";
 	do {
@@ -1667,7 +1674,19 @@ export default class PowerTablesPlugin extends Plugin {
 		if (!tr || tr.rowIndex !== 0) return null;
 		if (!cell.closest(".markdown-rendered") && !cell.closest(".cm-table-widget")) return null;
 		const r = cell.getBoundingClientRect();
-		return evt.clientX >= r.right - 6 && evt.clientX <= r.right + 2 ? cell : null;
+		// A boundary is grabbable from either side of the line, because that is
+		// what people aim at. Testing only right edges made the real target the
+		// few pixels inside one particular cell: land a pixel past the divider
+		// and closest() hands back the NEXT cell, whose own right edge is a whole
+		// column away, so the hover silently did nothing. Checking the left edge
+		// too and resizing the previous column turns two one-sided slivers into
+		// one band centred on the divider.
+		if (evt.clientX >= r.right - EDGE_GRAB && evt.clientX <= r.right + 2) return cell;
+		if (evt.clientX <= r.left + EDGE_GRAB && evt.clientX >= r.left - 2) {
+			const prev = cell.previousElementSibling;
+			return prev instanceof HTMLTableCellElement ? prev : null;
+		}
+		return null;
 	}
 
 	/** Excel's AutoFit: measure every column's widest unwrapped content on the

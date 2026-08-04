@@ -35,6 +35,13 @@
 th.ptb-col-edge,
 td.ptb-col-edge {
 	cursor: col-resize;
+	/* Draw the line that is about to move. The cursor alone told you a drag was
+	   possible but not which boundary it would take, which matters now that the
+	   band is grabbable from both sides: the highlighted edge is always the one
+	   the drag will resize, including when you approached it from the column to
+	   its right. Inset so it sits on the cell's own edge without changing
+	   layout, which a border would. */
+	box-shadow: inset -2px 0 0 0 var(--interactive-accent);
 }
 
 .ptb-grip {
