@@ -422,7 +422,19 @@ export default class PowerTablesPlugin extends Plugin {
 	private tableBars = new Map<MarkdownView, TableBar>();
 	/** The look the format painter is holding, or null when it is off. */
 	private painter: Patch | null = null;
+	/** "once" pays out on the next cell and disarms; "locked" keeps painting
+	 *  until it is switched off. The brush cycles off -> once -> locked -> off,
+	 *  so the sticky mode is found by clicking the button rather than by
+	 *  knowing Excel's undocumented double-click. */
+	private painterMode: "off" | "once" | "locked" = "off";
+	/** The cell a payout would be a no-op on: the source to begin with, then
+	 *  whichever cell was painted last. Without it a locked painter repaints
+	 *  the cell it is already sitting on. */
 	private painterFrom: { line: number; col: number } | null = null;
+	/** applyFromUI calls updatePanels, which calls paintIfArmed, so a locked
+	 *  painter would re-enter itself forever. A one-shot painter never noticed
+	 *  because it disarmed before applying. */
+	private painting = false;
 	/** The armed border-drawing tool, or null. */
 	private pen: { tool: "border" | "grid" | "erase" } | null = null;
 	private stickySel: ReturnType<PowerTablesPlugin["readWidgetSelection"]> = null;
@@ -1578,24 +1590,54 @@ export default class PowerTablesPlugin extends Plugin {
 	 * travel; the value never does, which is the whole point of a painter.
 	 */
 	togglePainter() {
-		if (this.painter) {
-			this.painter = null;
-			this.painterFrom = null;
-			new Notice("Format painter off.");
+		// off -> once -> locked -> off. Clicking the lit button again is how the
+		// sticky mode is discovered, and it means an Excel user's double-click
+		// lands on "locked" anyway, without any double-click handling.
+		if (this.painterMode === "once") {
+			this.painterMode = "locked";
+			new Notice("Format painter locked on. Every cell you click gets the look; Esc or the brush stops it.");
+			this.syncPainterChrome();
 			this.updatePanels();
+			return;
+		}
+		if (this.painterMode === "locked") {
+			this.setPainterOff("Format painter off.");
 			return;
 		}
 		const t = this.resolveTarget();
 		if (!t) return;
 		const raw = this.cellAttrsAt(t);
-		if (!raw || (raw.bg == null && raw.fg == null)) {
-			new Notice("Power Tables: that cell has no colors to copy.");
-			return;
-		}
+		if (!raw) return;
 		this.painter = raw;
+		this.painterMode = "once";
 		this.painterFrom = { line: t.line, col: t.col };
-		new Notice("Format painter on. Click another cell to paint it.");
+		// An unformatted cell is a legitimate thing to copy: it is how the
+		// painter strips a look back off, the same way Excel's does. The patch
+		// carries explicit nulls, which planEdits reads as "clear".
+		const bare = raw.bg == null && raw.fg == null && raw.borders == null && raw.fmt == null;
+		new Notice(
+			bare
+				? "Format painter on, holding no formatting. Click a cell to strip its look; click the brush again to keep going."
+				: "Format painter on. Click a cell to paint it; click the brush again to keep painting."
+		);
+		this.syncPainterChrome();
 		this.updatePanels();
+	}
+
+	private setPainterOff(msg?: string) {
+		this.painter = null;
+		this.painterMode = "off";
+		this.painterFrom = null;
+		if (msg) new Notice(msg);
+		this.syncPainterChrome();
+		this.updatePanels();
+	}
+
+	/** Body classes drive both the brush's own state and the cursor over cells,
+	 *  the same way the pen tool advertises itself. */
+	private syncPainterChrome() {
+		document.body.toggleClass("ptb-painting", this.painterMode !== "off");
+		document.body.toggleClass("ptb-painting-locked", this.painterMode === "locked");
 	}
 
 	/** The look of a cell, as a patch that can be applied to another. */
@@ -1608,9 +1650,13 @@ export default class PowerTablesPlugin extends Plugin {
 		const r = parseRow(lines[located]);
 		if (!r || r.isDelim) return null;
 		const p = parseCellContent(r.pieces[Math.min(t.col, r.cellCount - 1) + 1]);
-		// a Patch carries colors, so that is what the painter honestly copies:
-		// borders and number formats have their own tools and their own scopes
-		return { bg: p.bg, fg: p.fg, hl: p.hl };
+		// Everything that is a *look* travels: colors, the highlight mode,
+		// borders, and the number format. Every field is stated rather than
+		// left undefined, so copying a plain cell clears the target instead of
+		// leaving whatever it already had. What stays behind is the value, the
+		// column width, and any calc or formula: those are not the cell's
+		// appearance, and a painter that moved them would be a different tool.
+		return { bg: p.bg, fg: p.fg, hl: p.hl, borders: p.borders, fmt: p.fmt };
 	}
 
 	/** Wrap the targeted cell's text in a link, or unwrap it if it is one. */
@@ -2042,6 +2088,10 @@ export default class PowerTablesPlugin extends Plugin {
 		});
 		this.registerDomEvent(document, "keydown", (e) => {
 			if (e.key === "Escape" && this.pen) this.setPen(null);
+			// the painter is modal in the same way the pen is, so it leaves the
+			// same way; a locked one especially needs an exit that is not a hunt
+			// for the button that armed it
+			if (e.key === "Escape" && this.painterMode !== "off") this.setPainterOff("Format painter off.");
 		});
 	}
 
@@ -3005,16 +3055,32 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 	}
 
-	/** A primed painter pays out on the next cell the target moves to, then
-	 *  disarms. One press, one cell, like Excel's single-click painter. */
+	/** A primed painter pays out on the next cell the target moves to. In "once"
+	 *  it then disarms, like Excel's single-click painter; in "locked" it stays
+	 *  loaded and the next cell gets it too. */
 	private paintIfArmed() {
 		const patch = this.painter;
-		if (!patch) return;
+		// applyFromUI below runs updatePanels, which lands back here before the
+		// edit has even been made, so the target has not moved yet. Without this
+		// a locked painter recurses until the stack gives out.
+		if (!patch || this.painting) return;
 		const t = this.resolveTarget(true);
 		if (!t || (t.line === this.painterFrom?.line && t.col === this.painterFrom?.col)) return;
-		this.painter = null;
-		this.painterFrom = null;
-		this.applyFromUI(patch, null);
+		if (this.painterMode === "once") {
+			this.painter = null;
+			this.painterMode = "off";
+			this.painterFrom = null;
+			this.syncPainterChrome();
+		} else {
+			// stay loaded, but do not pay out again on the cell just painted
+			this.painterFrom = { line: t.line, col: t.col };
+		}
+		this.painting = true;
+		try {
+			this.applyFromUI(patch, null);
+		} finally {
+			this.painting = false;
+		}
 	}
 
 	updatePanels() {
@@ -3502,9 +3568,12 @@ class PanelUI {
 			this.iconBtn(trow, "highlighter", "Highlight with the last highlight color (follows Apply to)", (e) =>
 				void this.plugin.applyLastColor("hl", e)
 			);
-			this.iconBtn(trow, "paintbrush", "Format painter: copy this cell's colors, then click another cell to paint them", () =>
-				this.plugin.togglePainter()
-			);
+			this.iconBtn(
+				trow,
+				"paintbrush",
+				"Format painter: copies colors, highlight, borders and number format. Click a cell to paint it, click the brush again to keep painting, Esc stops. Copying a plain cell strips formatting instead.",
+				() => this.plugin.togglePainter()
+			).addClass("ptb-paintbtn");
 			this.iconBtn(trow, "link", "Wrap the cell's text in a link", () => void this.plugin.linkCell());
 		}
 
@@ -3678,11 +3747,12 @@ class PanelUI {
 		return b;
 	}
 
-	private iconBtn(parent: HTMLElement, icon: string, tip: string, fn: (e: MouseEvent) => void) {
+	private iconBtn(parent: HTMLElement, icon: string, tip: string, fn: (e: MouseEvent) => void): HTMLButtonElement {
 		const b = parent.createEl("button", { cls: "ptb-iconbtn", attr: { "aria-label": tip, title: tip } });
 		setIcon(b, icon);
 		this.guard(b);
 		b.addEventListener("click", (e) => fn(e));
+		return b;
 	}
 
 	private dataBtn(parent: HTMLElement, lbl: string, tip: string, fn: (e: MouseEvent) => void): HTMLButtonElement {
