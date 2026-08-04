@@ -2,20 +2,23 @@
 
 Excel-grade power tools for Markdown tables in Obsidian: **cell fill and text colors** from a floating toolbar, **live calculations** (sum, average, min, max, count) that recalculate as you type, and **smart sorting** that understands numbers, currency, and dates, all while your tables stay **plain Markdown**.
 
-[![Buy me a coffee](https://cdn.buymeacoffee.com/buttons/default-yellow.png)](https://buymeacoffee.com/powerplugins)
+![A budget table with red and green cell fills on the variance column, currency formatting, Excel-style row numbers and column letters, and a totals row of live sums, with the Power Tables panel open beside it showing the formula bar reading =SUM(D2:D11)](docs/images/power-tables.png)
 
-![A budget table with red and green cell fills on the variance column, currency formatting, Excel-style row numbers and column letters, and a totals row of live sums, with the Power Tables panel open beside it showing the formula bar reading =SUM(D1:D10)](docs/images/power-tables.png)
+[![Buy me a coffee](docs/images/buy-me-a-coffee.png)](https://buymeacoffee.com/powerplugins)
 
 Fills mark the two overspends and the two largest savings, the figures carry
 currency formatting, and the Total row is live: the formula bar shows the
-selected cell is `=SUM(D1:D10)`, and 54,080.00 minus 53,535.00 is the 545.00 in
+selected cell is `=SUM(D2:D11)`, and 54,080.00 minus 53,535.00 is the 545.00 in
 the variance column. Everything on the left is still plain Markdown in the file.
 
 ## Features at a glance
 
 - Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column
-- Live totals and Excel-style formulas: `=SUM(B:B)`, `=C1*1.08`, `IF`, `SUMIF`, `COUNTIF`, `ROUND`, `ABS`, with a formula bar and AutoSum over a drag selection
-- A stats chip (Sum, Avg, Count) whenever you select numeric cells
+- Live totals and Excel-style formulas: 41 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
+- References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
+- Fill down and fill right over a selection, with `$B$2` anchoring to pin what shouldn't travel
+- A formula bar that completes function names and takes references by clicking cells, and Excel's error values (`#VALUE!` `#NAME?` `#REF!` `#N/A` `#DIV/0!`) so a broken formula says what broke
+- A selection bar whenever you drag-select cells: column alignment right there, plus Sum, Avg, Count and one-click AutoSum when the cells are numbers
 - Sorting that understands numbers, currency, and dates; row and column moves; insert, delete, duplicate
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
@@ -49,18 +52,18 @@ The plugin then paints the whole `<td>` from that span, so the entire cell fills
 
 The panel shows a live **cell reference** (like `B3`) for the targeted cell and groups its tools into sections: **Text** (bold, italic, strikethrough, column alignment, borders), **Apply to** (Cell / Row / Column: the scope that colors, text styles, number formats, and Clear values act on), **Colors**, **Number format**, and **Data** (live calcs, totals row, sorting, insert row/column, CSV import, clipboard paste, clearing). **Right-click any table cell** for row/column operations: insert above/below/left/right, duplicate row, clear contents, delete row/column.
 
-The quick format buttons (`Auto` `123` `$` `%` `Date`) reformat cells in one shot; markdown stays the source of truth. `Date` rewrites anything that parses as a date (`3-14-12`, `2012-03-14`, `Mar 14, 2012` …) to `m/d/yyyy`. Other date styles live in Format cells…. For Excel-style control there is also a floating, draggable **Format cells…** dialog: decimal places, thousands separator, negative styles including red and accounting parentheses, currency symbols (the four presets or any symbol you type; currency symbols like ₹ stay summable, letter codes format only), and date/time formats, all previewed on the targeted cell's own value and applied at the Apply-to scope. With Apply to set to Row or Column, tick **Keep formatting** to make the format sticky: it's stored as a `data-fmt` tag on the column's header cell (or the row's first cell) and automatically re-applied as cells change and new rows or columns arrive. The cell being typed in is left alone until the cursor moves on.
+The table bar's two split buttons stand in for a row of them, the way Excel consolidates the same tools: **AutoSum** sums the selection or the column on click, with Average, Count, Max, Min and a way through to row totals and the formula editor on its arrow; **Format** opens the number formats (General, Number, Currency, Accounting, Short and Long date, Time, Percentage), each previewed against the targeted cell's own value so you pick by what it will look like. Only formats this plugin can actually render are listed. Markdown stays the source of truth: the date entries rewrite anything that parses as a date (`3-14-12`, `2012-03-14`, `Mar 14, 2012` …) into the chosen style. For finer control there is also a floating, draggable **Format cells…** dialog: decimal places, thousands separator, negative styles including red and accounting parentheses, currency symbols (the four presets or any symbol you type; currency symbols like ₹ stay summable, letter codes format only), and date/time formats, all previewed on the targeted cell's own value and applied at the Apply-to scope. With Apply to set to Row or Column, tick **Keep formatting** to make the format sticky: it's stored as a `data-fmt` tag on the column's header cell (or the row's first cell) and automatically re-applied as cells change and new rows or columns arrive. The cell being typed in is left alone until the cursor moves on.
 
 2. Target a cell:
    - **Editing view (Live Preview or Source):** just put the cursor in the cell.
    - **Reading view:** click the cell and it gets an accent outline.
-   - **Drag-select several cells** (Live Preview): colors, bold/italic/strike, alignment, borders, number formats, and Clear values apply to **every selected cell** (modifier keys still override per click).
+   - **Drag-select several cells** (Live Preview): colors, bold/italic/strike, alignment, borders, number formats, and Clear values apply to **every selected cell** (modifier keys still override per click). A **selection bar** appears while the selection is live, carrying the three column-alignment buttons so you never have to cross the screen for them, and Sum, Avg, Count with a one-click `Σ Insert` when the cells hold numbers.
 3. Pick what you're coloring with the **Cell fill / Text** toggle (the small bar under each shows its current color), then click a color:
    - The palette is Office-style: a **Theme colors** row with auto-generated tints and shades below each color, plus the classic **Standard colors** row.
    - Set **Apply to** to Row or Column to make every color, text style, number format, and Clear values click act on the whole row/column, or hold **Shift** (row) / **Ctrl** (column) for a one-off.
    - **No color** clears that property; **More colors…** opens a full color picker (click it again to close).
    - **Clear table** removes every color from the table under the cursor / last clicked cell.
-4. **Borders** (the ▢ button in the Text row) work like Excel's menu at the Apply-to selection: bottom/top/left/right edge, **All borders**, **Outside** or **Thick outside** borders around the cell, row, or column, and **No border** to clear. Edges are stored in the cell's wrapper (`data-b="tblr"`, uppercase = thick) and painted by the plugin's CSS, so the table stays plain Markdown and degrades cleanly without the plugin.
+4. **Borders** (the ▢ button in the Text row) work like Excel's menu at the Apply-to selection: bottom/top/left/right edge, **All borders**, **Outside** or **Thick outside** borders around the cell, row, or column, and **No border** to clear. Excel's stacked presets are there too: thick bottom, double bottom, and top-and-bottom in thin, thick or double. **Draw Borders** arms a pen: *Draw border* lays an edge on whichever side of a cell you drag nearest, *Draw border grid* boxes every cell you cross, *Erase border* strips them, and the whole drag commits as one edit rather than one per cell. *Line style* picks thin, thick, double, dashed or dotted; *Line color* picks from seven named colors (names rather than arbitrary hex, because the edges are painted by CSS off the stored attribute and a fixed set keeps the note portable). Esc, or the same menu entry again, puts the pen down. Edges are stored in the cell's wrapper (`data-b="tblr"`, uppercase = thick, `=` ahead of a letter for double, so `t=b` is a thin top over a double bottom) and painted by the plugin's CSS, so the table stays plain Markdown and degrades cleanly without the plugin.
 
 ### Checkboxes, highlights & column widths
 
@@ -87,7 +90,24 @@ The math understands `$`/`€`/`£`/`¥` prefixes, thousands commas, and account
 
 ### Formulas
 
-Cells can hold Excel-style formulas. Type `=SUM(B1:B3)` (or `=C1*1.08`, `=AVG(B1,B3)`, `=(A1+A2)*2`, `=SUM(B:B)` for a whole column) into a cell, use the **formula bar** at the top of the sidebar (Enter or clicking away commits to the cell you loaded it from; Esc cancels), or right-click and choose *Edit value / formula…*. The cell becomes a live formula: the computed value is stored in the markdown (so notes render everywhere), the formula rides along in the wrapper, and everything recalculates automatically when referenced cells change. References use column letters and 1-based data rows (`C2` = third column, second data row; the header row isn't addressable). Supported: `SUM`, `AVG`/`AVERAGE`, `MIN`, `MAX`, `COUNT` over ranges, whole columns (`B:B`), whole rows (`3:3`), or argument lists, plus `+ - * / ( )` arithmetic, all evaluated by a built-in parser (no `eval`). Invalid formulas show `#ERR` (fix them in the formula bar); a formula's own cell is excluded from its ranges. Formula values feed live calcs and other formulas; chains settle automatically. Formulas and live calcs keep their number format: formatting one (quick buttons or Format cells…) stores the format on the cell, and every recomputation renders through it. A formula's own format wins over its row's, which wins over its column's.
+Cells can hold Excel-style formulas. Type `=SUM(B2:B4)` (or `=C2*1.08`, `=AVG(B2,B4)`, `=(A2+A3)*2`, `=SUM(B:B)` for a whole column) into a cell, use the **formula bar** at the top of the sidebar (Enter or clicking away commits to the cell you loaded it from; Esc cancels), or right-click and choose *Edit value / formula…*. The cell becomes a live formula: the computed value is stored in the markdown (so notes render everywhere), the formula rides along in the wrapper, and everything recalculates automatically when referenced cells change. References are Excel-literal: column letters and 1-based rows that count the header, so `C1` is column C's header cell and `C2` is its first data row, matching the numbers in the gutter and the numbers you would use in a spreadsheet. Header cells are addressable like any other, so a formula can live in one and be referenced from elsewhere. Every function takes ranges, whole columns (`B:B`), whole rows (`3:3`), or plain argument lists:
+
+| | |
+|---|---|
+| Math and stats | `SUM` `AVG`/`AVERAGE` `MIN` `MAX` `MEDIAN` `PRODUCT` `SUMPRODUCT` `STDEV` `POWER` `SQRT` `INT` `MOD` `ABS` `ROUND` `ROUNDUP` `ROUNDDOWN` |
+| Counting | `COUNT` `COUNTA` `COUNTBLANK` |
+| Conditional | `IF` `IFERROR` `AND` `OR` `NOT` `SUMIF` `COUNTIF` `AVERAGEIF` |
+| Text | `LEN` `LEFT` `RIGHT` `MID` `TRIM` `UPPER` `LOWER` `CONCAT` |
+| Lookup | `VLOOKUP` `MATCH` `INDEX` |
+| Dates | `YEAR` `MONTH` `DAY`, read off a date cell |
+
+Operators are Excel's, with Excel's precedence: `+ - * / ( )`, `^` for powers (right associative, so `2^3^2` is 512), `&` to join text, a postfix `%`, and the comparisons `= <> > < >= <=`. Unary minus binds tighter than `^`, so `-2^2` is 4, same as Excel. Everything is evaluated by a built-in parser, never `eval`. `TODAY()` and `NOW()` are deliberately absent: computed values are stored in the note, so a clock-dependent formula would rewrite your notes on open every time the date rolled over. **Fill down and fill right** write a formula once and apply it to a range. Drag-select the cells and run *Fill down* (the panel's `Fill ↓`, the right-click menu, or the command, which takes a hotkey if you want Excel's Ctrl+D): the top of the selection copies into the rest, and each copy's references move with it, so `=C2-B2` becomes `=C3-B3` down the column. With a single cell targeted it fills from the row above, the way Ctrl+D does in Excel. *Fill right* is the same across columns. Anchor anything that shouldn't travel with `$`: `=B3*$B$2` filled down keeps reading the one rate cell while its other reference follows each row. `$B$2` pins both, `$B2` pins the column, `B$2` pins the row, exactly as in Excel, and anchors are ignored when the formula is simply evaluated. Note that a `$` only holds a copy still: inserting a row above an anchored cell still moves the reference, because the cell itself moved, which is also how Excel behaves.
+
+**References follow structural edits, the way Excel's do.** Insert a row in the middle and `=SUM(D2:D3)` becomes `=SUM(D2:D4)`; the rows below keep pointing at their own cells. Delete a row and the range shrinks to match. Move or sort rows and every formula travels with its data instead of reading whatever landed in that slot. Duplicate a row and the copy computes from its own cells. Insert or delete a column and the letters shift. Delete something a formula actually named and you get `#REF!`, which says what to go fix, rather than a plausible wrong number.
+
+**When a formula fails it says which kind of wrong it is**, using Excel's error values, because each one points somewhere different: `#VALUE!` at an argument (text where a number belongs), `#NAME?` at what you typed (an unknown function, or input that will not parse), `#REF!` at something that was deleted, `#N/A` at a lookup that found nothing, `#DIV/0!` and `#NUM!` at impossible arithmetic. Wrap anything in `IFERROR` to substitute a value instead. The one code Excel does not have is `#CIRC!`, for a cell that ends up referring to itself: Excel warns in a dialog and leaves the cell reading 0, which is not available from inside a note, and a silent 0 is the failure this plugin is least willing to ship.
+
+The **formula bar completes function names** as you type: `=VL` offers `VLOOKUP`, arrow keys move through the list, Tab or Enter accepts and drops you inside the parentheses. And it does **point mode**, Excel's click-to-reference: with the caret somewhere a reference could go (just after `=`, an operator, `(`, or `,`) the bar's border picks up the accent color, and clicking a cell inserts its address instead of jumping to it. Click through the cells you want, type the operators between them, press Enter. Anywhere else in the formula a click still just targets that cell, so nothing changes about the way you normally move around. Formula values feed live calcs and other formulas; chains settle automatically. Formulas and live calcs keep their number format: formatting one (quick buttons or Format cells…) stores the format on the cell, and every recomputation renders through it. A formula's own format wins over its row's, which wins over its column's.
 
 ### Conditional color rules
 
@@ -105,7 +125,7 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 
 **Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
 
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*.
+Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*.
 
 ### On mobile
 
@@ -114,7 +134,7 @@ Everything renders and edits on phones and tablets; notes colored on desktop loo
 ## Settings
 
 - **Auto-open sidebar**: reveal the Power Tables pane the first time you edit inside a table each session.
-- **Cell reference guides**: Excel-style column letters above and row numbers beside every table (on by default).
+- **Cell reference guides**: Excel-style column letters above and row numbers beside every table, with the header as row 1 and the first data row as 2, exactly as Excel numbers them (on by default).
 - **Hide cell markup while editing**: collapse the `<span>` wrapper and whole-value bold/italic/strike markers in Live Preview, keeping the cell rendered with its colors (on by default).
 - **Striped rows** / **Compact tables**: global table appearance toggles.
 - **Header fill**: paint every table's header row with one color, chosen via the swatch next to the toggle (on by default, soft blue). It's pure styling (no files change) and per-cell header colors you set explicitly still win over it. **Header fill in dark mode** keeps a separate color for dark themes.
