@@ -15,6 +15,11 @@ export interface Patch {
 	fg?: string | null;
 	/** with a string bg: true = highlight just the text, false/absent = fill the cell */
 	hl?: boolean;
+	/** Edge letters as stored in data-b. Same three-way convention as bg. Only
+	 *  the format painter sets these; the border tool has its own scoped plan. */
+	borders?: string | null;
+	/** Number format as stored in data-fmt, same three-way convention. */
+	fmt?: string | null;
 }
 
 export interface CellTargetLoc {
@@ -284,7 +289,11 @@ export function planEdits(lines: string[], target: CellTargetLoc, patch: Patch, 
 			// highlight flag: text-color-only patches keep it; setting a fill
 			// takes the patch's mode (default: whole-cell); clearing bg drops it
 			const nhl = patch.bg === undefined ? parsed.hl : patch.bg ? (patch.hl ?? false) : false;
-			const next = ` ${buildCellContent(parsed.inner, nbg, nfg, parsed.calc, parsed.formula, parsed.borders, parsed.fmt, nhl, parsed.w, parsed.rule, parsed.tbl)} `;
+				// borders and number format travel only when the patch mentions them,
+				// so every existing caller keeps preserving whatever the cell already had
+				const nborders = patch.borders === undefined ? parsed.borders : patch.borders;
+				const nfmt = patch.fmt === undefined ? parsed.fmt : patch.fmt;
+			const next = ` ${buildCellContent(parsed.inner, nbg, nfg, parsed.calc, parsed.formula, nborders, nfmt, nhl, parsed.w, parsed.rule, parsed.tbl)} `;
 			if (next !== old) {
 				r.pieces[c + 1] = next;
 				changed = true;

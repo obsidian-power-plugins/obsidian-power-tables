@@ -182,6 +182,24 @@ ok(t3.includes('style="background:#0F0;color:#C00000"'), "bg kept, fg added (leg
 plan = planEdits(T.slice(), { line: 3, col: 2, expect: null }, { bg: null, fg: null }, "cell")!;
 eq(plan.edits[0].text, "| Queen | 60 | $19.60 |", "clear unwraps span completely");
 
+// --- borders and number format travel, but only when the patch names them ---
+const TB = ["| A | B |", "| --- | --- |", '| <span class="ptb" data-b="tb" data-fmt="currency">5</span> | x |'];
+
+// the guard that matters: every caller that existed before the format painter
+// carried borders and formats sends colour-only patches, and must keep them
+plan = planEdits(TB.slice(), { line: 2, col: 0, expect: null }, { bg: "#FFFF00" }, "cell")!;
+ok(plan.edits[0].text.includes('data-b="tb"'), "a colour-only patch leaves borders where they were");
+ok(plan.edits[0].text.includes('data-fmt="currency"'), "a colour-only patch leaves the number format alone");
+
+plan = planEdits(TB.slice(), { line: 2, col: 0, expect: null }, { borders: "lr", fmt: "percent" }, "cell")!;
+ok(plan.edits[0].text.includes('data-b="lr"'), "naming borders in the patch replaces them");
+ok(plan.edits[0].text.includes('data-fmt="percent"'), "naming the format in the patch replaces it");
+
+// the painter picking up an unformatted cell: every field is stated as null, so
+// painting with it strips the target rather than leaving what was already there
+plan = planEdits(TB.slice(), { line: 2, col: 0, expect: null }, { bg: null, fg: null, borders: null, fmt: null }, "cell")!;
+eq(plan.edits[0].text, "| 5 | x |", "a patch of all nulls strips the cell back to plain text");
+
 // --- row scope ---
 plan = planEdits(T.slice(), { line: 2, col: 0, expect: null }, { bg: "#D9D9D9" }, "row")!;
 eq((plan.edits[0].text.match(/<span/g) || []).length, 3, "row scope wraps all cells");
