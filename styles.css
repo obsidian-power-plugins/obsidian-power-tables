@@ -959,47 +959,49 @@ body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-nog
 }
 
 /* ---------- cell borders ----------
-   Edges live in the span's data-b ("tblr", uppercase = thick) and are painted
-   onto the cell itself; attribute matching is case-sensitive, so "t" and "T"
-   select thin vs thick independently. */
+   Edges live in the span's data-b ("tblr", uppercase = thick), which the DOM
+   sweep mirrors onto the cell as data-ptb-b so these rules can match the cell
+   directly instead of reaching into it with :has(), which invalidates styles up
+   the tree on every descendant change. Attribute matching is case-sensitive, so
+   "t" and "T" select thin vs thick independently. */
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="t"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="t"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="t"],
+.cm-table-widget :is(td, th)[data-ptb-b*="t"] {
 	border-top: 1px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="b"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="b"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="b"],
+.cm-table-widget :is(td, th)[data-ptb-b*="b"] {
 	border-bottom: 1px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="l"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="l"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="l"],
+.cm-table-widget :is(td, th)[data-ptb-b*="l"] {
 	border-left: 1px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="r"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="r"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="r"],
+.cm-table-widget :is(td, th)[data-ptb-b*="r"] {
 	border-right: 1px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="T"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="T"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="T"],
+.cm-table-widget :is(td, th)[data-ptb-b*="T"] {
 	border-top: 2.5px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="B"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="B"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="B"],
+.cm-table-widget :is(td, th)[data-ptb-b*="B"] {
 	border-bottom: 2.5px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="L"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="L"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="L"],
+.cm-table-widget :is(td, th)[data-ptb-b*="L"] {
 	border-left: 2.5px solid var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="R"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="R"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="R"],
+.cm-table-widget :is(td, th)[data-ptb-b*="R"] {
 	border-right: 2.5px solid var(--text-normal);
 }
 
@@ -1008,8 +1010,8 @@ body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-nog
 span.ptb-hl {
 	border-radius: 3px;
 	padding: 0 3px;
+	/* Chromium only, so the prefixed form is the one that applies here */
 	-webkit-box-decoration-break: clone;
-	box-decoration-break: clone;
 }
 
 /* ---------- in-cell checkboxes rendered from [ ] / [x] ---------- */
@@ -1027,24 +1029,25 @@ input.ptb-cbx {
 
 /* Momentary class applied by Auto-fit: every column shrink-wraps its widest
    unwrapped content so the JS can read natural column widths off the first
-   row. The !importants beat the inline widths the plugin itself set earlier.
-   The class is on and off again within one task, so it never paints. */
+   row. The class is on and off again within one task, so it never paints.
+   No !important needed: the only thing these had to beat was the plugin's own
+   inline widths, and measureColumnWidths lifts those off for the duration. */
 table.ptb-measure {
-	table-layout: auto !important;
-	width: max-content !important;
-	max-width: none !important;
+	table-layout: auto;
+	width: max-content;
+	max-width: none;
 }
 
 table.ptb-measure :is(td, th) {
-	width: auto !important;
-	min-width: 0 !important;
-	max-width: none !important;
-	white-space: nowrap !important;
+	width: auto;
+	min-width: 0;
+	max-width: none;
+	white-space: nowrap;
 }
 
 /* the filter row is injected at read time; its inputs must not drive widths */
 table.ptb-measure tr.ptb-filter {
-	display: none !important;
+	display: none;
 }
 
 /* ---------- settings tab (tabs + search) ---------- */
@@ -1367,61 +1370,61 @@ button.ptb-dropbtn {
 /* Double edges. "=b" still contains "b", so the thin rule above matches first
    and these only have to override the style and width; they sit after it in the
    file for exactly that reason. 3px is the least that renders as two lines. */
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="=t"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="=t"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="=t"],
+.cm-table-widget :is(td, th)[data-ptb-b*="=t"] {
 	border-top: 3px double var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="=b"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="=b"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="=b"],
+.cm-table-widget :is(td, th)[data-ptb-b*="=b"] {
 	border-bottom: 3px double var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="=l"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="=l"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="=l"],
+.cm-table-widget :is(td, th)[data-ptb-b*="=l"] {
 	border-left: 3px double var(--text-normal);
 }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="=r"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="=r"]) {
+.markdown-rendered :is(td, th)[data-ptb-b*="=r"],
+.cm-table-widget :is(td, th)[data-ptb-b*="=r"] {
 	border-right: 3px double var(--text-normal);
 }
 
 /* Dashed and dotted edges, and the pen colours. Same trick as the doubles: the
    marked form still contains the edge letter, so the rule that paints that edge
    matches first and these only override style, width, or colour. */
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="~t"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="~t"]) { border-top-style: dashed; }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="~b"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="~b"]) { border-bottom-style: dashed; }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="~l"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="~l"]) { border-left-style: dashed; }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="~r"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="~r"]) { border-right-style: dashed; }
+.markdown-rendered :is(td, th)[data-ptb-b*="~t"],
+.cm-table-widget :is(td, th)[data-ptb-b*="~t"] { border-top-style: dashed; }
+.markdown-rendered :is(td, th)[data-ptb-b*="~b"],
+.cm-table-widget :is(td, th)[data-ptb-b*="~b"] { border-bottom-style: dashed; }
+.markdown-rendered :is(td, th)[data-ptb-b*="~l"],
+.cm-table-widget :is(td, th)[data-ptb-b*="~l"] { border-left-style: dashed; }
+.markdown-rendered :is(td, th)[data-ptb-b*="~r"],
+.cm-table-widget :is(td, th)[data-ptb-b*="~r"] { border-right-style: dashed; }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*=".t"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*=".t"]) { border-top-style: dotted; }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*=".b"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*=".b"]) { border-bottom-style: dotted; }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*=".l"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*=".l"]) { border-left-style: dotted; }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*=".r"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*=".r"]) { border-right-style: dotted; }
+.markdown-rendered :is(td, th)[data-ptb-b*=".t"],
+.cm-table-widget :is(td, th)[data-ptb-b*=".t"] { border-top-style: dotted; }
+.markdown-rendered :is(td, th)[data-ptb-b*=".b"],
+.cm-table-widget :is(td, th)[data-ptb-b*=".b"] { border-bottom-style: dotted; }
+.markdown-rendered :is(td, th)[data-ptb-b*=".l"],
+.cm-table-widget :is(td, th)[data-ptb-b*=".l"] { border-left-style: dotted; }
+.markdown-rendered :is(td, th)[data-ptb-b*=".r"],
+.cm-table-widget :is(td, th)[data-ptb-b*=".r"] { border-right-style: dotted; }
 
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#red"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#red"]) { border-color: var(--color-red, #e93147); }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#orange"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#orange"]) { border-color: var(--color-orange, #ec7500); }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#yellow"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#yellow"]) { border-color: var(--color-yellow, #e0ac00); }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#green"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#green"]) { border-color: var(--color-green, #08b94e); }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#blue"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#blue"]) { border-color: var(--color-blue, #086ddd); }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#purple"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#purple"]) { border-color: var(--color-purple, #7852ee); }
-.markdown-rendered :is(td, th):has(span.ptb[data-b*="#grey"]),
-.cm-table-widget :is(td, th):has(span.ptb[data-b*="#grey"]) { border-color: var(--text-faint); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#red"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#red"] { border-color: var(--color-red, #e93147); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#orange"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#orange"] { border-color: var(--color-orange, #ec7500); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#yellow"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#yellow"] { border-color: var(--color-yellow, #e0ac00); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#green"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#green"] { border-color: var(--color-green, #08b94e); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#blue"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#blue"] { border-color: var(--color-blue, #086ddd); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#purple"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#purple"] { border-color: var(--color-purple, #7852ee); }
+.markdown-rendered :is(td, th)[data-ptb-b*="#grey"],
+.cm-table-widget :is(td, th)[data-ptb-b*="#grey"] { border-color: var(--text-faint); }
 
 /* the pen is armed: the table says so, and the pointer says what it will do */
 body.ptb-drawing :is(.markdown-rendered, .cm-table-widget) table :is(td, th) {

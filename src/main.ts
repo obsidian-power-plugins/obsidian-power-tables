@@ -827,6 +827,7 @@ export default class PowerTablesPlugin extends Plugin {
 			(cell as HTMLElement).style.removeProperty("background-color");
 			cell.removeAttribute("data-ptb");
 		});
+		document.body.querySelectorAll("td[data-ptb-b], th[data-ptb-b]").forEach((c) => c.removeAttribute("data-ptb-b"));
 	}
 
 	/* ---------------- cell background lifting ---------------- */
@@ -861,6 +862,10 @@ export default class PowerTablesPlugin extends Plugin {
 			}
 		});
 		document.body.querySelectorAll("td span.ptb, th span.ptb").forEach((s) => this.lift(s as HTMLElement));
+		// a cell keeps its lifted borders only while a span still carries them
+		document.body.querySelectorAll("td[data-ptb-b], th[data-ptb-b]").forEach((cell) => {
+			if (!cell.querySelector("span.ptb[data-b]")) cell.removeAttribute("data-ptb-b");
+		});
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
 			const s = cell.querySelector<HTMLElement>("span.ptb");
 			if (!s || !s.style.backgroundColor || s.classList.contains("ptb-hl")) {
@@ -955,6 +960,17 @@ export default class PowerTablesPlugin extends Plugin {
 	private lift(span: HTMLElement) {
 		const cell = span.closest<HTMLTableCellElement>("td, th");
 		if (!cell) return;
+		// Borders ride an attribute copied onto the cell rather than a :has()
+		// selector reaching down into the span. :has() invalidates styles up the
+		// tree whenever any descendant changes, and a note full of tables being
+		// live-edited changes descendants constantly. This sweep already runs on
+		// the same mutations, so mirroring the attribute costs nothing extra.
+		const b = span.getAttribute("data-b");
+		if (b) {
+			if (cell.getAttribute("data-ptb-b") !== b) cell.setAttribute("data-ptb-b", b);
+		} else if (cell.hasAttribute("data-ptb-b")) {
+			cell.removeAttribute("data-ptb-b");
+		}
 		if (span.classList.contains("ptb-hl")) return;
 		const bg = span.style.backgroundColor;
 		if (!bg) return;
@@ -1698,6 +1714,14 @@ export default class PowerTablesPlugin extends Plugin {
 	private measureColumnWidths(tbl: HTMLTableElement): number[] {
 		const firstRow = tbl.querySelector("tr");
 		if (!firstRow) return [];
+		// The widths being measured around are inline ones this plugin set, and
+		// no amount of selector specificity beats an inline style. So take them
+		// off for the measurement and put them back, rather than shouting them
+		// down with !important from the stylesheet.
+		const pinned = Array.from(tbl.querySelectorAll<HTMLElement>("td[style*='width'], th[style*='width']")).map(
+			(el) => [el, el.style.width] as const
+		);
+		for (const [el] of pinned) el.style.removeProperty("width");
 		tbl.addClass("ptb-measure");
 		try {
 			// +2 absorbs fractional-pixel rounding so a stored width never lands
@@ -1705,6 +1729,7 @@ export default class PowerTablesPlugin extends Plugin {
 			return Array.from(firstRow.children).map((c) => Math.ceil(c.getBoundingClientRect().width) + 2);
 		} finally {
 			tbl.removeClass("ptb-measure");
+			for (const [el, w] of pinned) el.style.width = w;
 		}
 	}
 
