@@ -114,6 +114,8 @@ import {
 	tableBounds,
 	tableFromRows,
 	mergeForSave,
+	parseCellLink,
+	buildCellLink,
 } from "./cells";
 
 /** A resolved action target. Dialogs pin one at open so clicks that land
@@ -415,6 +417,10 @@ export default class PowerTablesPlugin extends Plugin {
 	uiScope: Scope = "cell";
 	private toolbar: ColorToolbar | null = null;
 	private clickTarget: ClickTarget | null = null;
+	/** Cell under the most recent right-button press, cleared by any press that
+	 *  missed a table. Obsidian owns the context menu on a link, so this is how
+	 *  the handler filling that menu knows the link was in one of our cells. */
+	private rightPressCell: HTMLTableCellElement | null = null;
 	private outlined: HTMLElement | null = null;
 	private scanQueued = false;
 	private recalcTimers = new Map<string, number>();
@@ -645,6 +651,18 @@ export default class PowerTablesPlugin extends Plugin {
 
 		this.registerDomEvent(document, "click", (evt) => this.onDocClick(evt), { capture: true });
 		this.registerDomEvent(document, "contextmenu", (evt) => this.onCellContextMenu(evt), { capture: true });
+		// Remember where a right-click landed before any contextmenu handler
+		// runs, ours or Obsidian's. Recording it on the press instead of the
+		// menu event means the order those handlers fire in cannot matter.
+		this.registerDomEvent(
+			document,
+			"pointerdown",
+			(evt) => {
+				const cell = evt.target instanceof Element ? evt.target.closest<HTMLTableCellElement>("td, th") : null;
+				this.rightPressCell = evt.button === 2 && cell?.closest(".markdown-rendered") ? cell : null;
+			},
+			{ capture: true }
+		);
 		// Rendered [ ]/[x] checkboxes write their state back to the markdown.
 		// The whole toggle runs on pointerdown in the capture phase: that is
 		// the one event guaranteed to reach us before Live Preview's table
@@ -785,6 +803,12 @@ export default class PowerTablesPlugin extends Plugin {
 				this.addStructureItems(menu);
 			})
 		);
+
+		// The two menus Obsidian raises for a right-clicked link: url-menu for an
+		// external URL, file-menu for a note. Adding to them is what keeps a link
+		// cell down to one menu.
+		this.registerEvent(this.app.workspace.on("url-menu", (menu) => this.addLinkCellItems(menu)));
+		this.registerEvent(this.app.workspace.on("file-menu", (menu) => this.addLinkCellItems(menu)));
 
 		// Hide the span wrappers while editing in Live Preview.
 		this.registerEditorExtension(this.hiderExtension);
@@ -1208,10 +1232,28 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 		this.setOutline(cell);
 		this.updatePanels();
+		// Obsidian raises its own menu when the right-click lands on a link, and
+		// two menus stacked over one click is what the user gets if we raise a
+		// second. Let Obsidian's win; addLinkCellItems hangs the table actions
+		// off it so nothing is lost by standing down here.
+		if (evt.target.closest("a.external-link, a.internal-link")) return;
+		// answered here, so it cannot go on to fill a link menu somewhere else
+		this.rightPressCell = null;
 		evt.preventDefault();
 		const menu = new Menu();
 		this.addStructureItems(menu);
 		menu.showAtMouseEvent(evt);
+	}
+
+	/** Append the table actions to the link menu Obsidian raised over one of our
+	 *  cells. Both events also fire for links nowhere near a table, so the
+	 *  remembered press is the gate, and it is spent on the first menu it fills. */
+	private addLinkCellItems(menu: Menu) {
+		if (!this.rightPressCell) return;
+		this.rightPressCell = null;
+		menu.addSeparator();
+		menu.addItem((i) => i.setTitle("Edit link…").setIcon("link").onClick(() => void this.linkCell()));
+		this.addStructureItems(menu);
 	}
 
 	private addStructureItems(menu: Menu) {
@@ -1659,23 +1701,35 @@ export default class PowerTablesPlugin extends Plugin {
 		return { bg: p.bg, fg: p.fg, hl: p.hl, borders: p.borders, fmt: p.fmt };
 	}
 
-	/** Wrap the targeted cell's text in a link, or unwrap it if it is one. */
+	/** Link the targeted cell's text, or edit the link it already holds. */
 	async linkCell() {
 		const t = this.resolveTarget();
 		if (!t) return;
-		const raw = this.currentCellRaw(t) ?? "";
-		const existing = /^\[([^\]]*)\]\(([^)]*)\)$/.exec(raw.trim());
-		if (existing) {
-			await this.commitCellValue(existing[1], t);
-			new Notice("Link removed; the text stays.");
+		const raw = (this.currentCellRaw(t) ?? "").trim();
+		const link = parseCellLink(raw);
+		if (link) {
+			// A cell that is already a link opens for editing with its target
+			// filled in. Unlinking used to be all this did, which meant the only
+			// way to correct a URL was to throw it away and retype the whole
+			// thing; it is the second button now.
+			new LinkCellModal(
+				this.app,
+				link.label,
+				link.url,
+				async (url) => void (await this.commitCellValue(buildCellLink(link.label, url, link.wiki), t)),
+				async () => {
+					await this.commitCellValue(link.label, t);
+					new Notice("Link removed; the text stays.");
+				}
+			).open();
 			return;
 		}
-		if (!raw.trim()) {
+		if (!raw) {
 			new Notice("Power Tables: put some text in the cell first, then link it.");
 			return;
 		}
-		new LinkCellModal(this.app, raw.trim(), async (url) => {
-			await this.commitCellValue(`[${raw.trim()}](${url})`, t);
+		new LinkCellModal(this.app, raw, "", async (url) => {
+			await this.commitCellValue(buildCellLink(raw, url), t);
 		}).open();
 	}
 
@@ -3574,7 +3628,9 @@ class PanelUI {
 				"Format painter: copies colors, highlight, borders and number format. Click a cell to paint it, click the brush again to keep painting, Esc stops. Copying a plain cell strips formatting instead.",
 				() => this.plugin.togglePainter()
 			).addClass("ptb-paintbtn");
-			this.iconBtn(trow, "link", "Wrap the cell's text in a link", () => void this.plugin.linkCell());
+			this.iconBtn(trow, "link", "Wrap the cell's text in a link, or edit the link it already has", () =>
+				void this.plugin.linkCell()
+			);
 		}
 
 		// Visible stand-in for the Shift/Ctrl modifiers: pick a scope once and
@@ -4025,21 +4081,36 @@ function floatModal(m: Modal) {
 }
 
 /** Ask for a link target. The cell's own text becomes the label, so the only
- *  thing left to supply is where it points. */
+ *  thing left to supply is where it points. Passing onRemove turns the dialog
+ *  into the editor for a link the cell already has. */
 class LinkCellModal extends Modal {
-	private value = "";
+	private value: string;
 
-	constructor(app: App, private label: string, private onDone: (url: string) => void | Promise<void>) {
+	constructor(
+		app: App,
+		private label: string,
+		private initial: string,
+		private onDone: (url: string) => void | Promise<void>,
+		private onRemove: (() => void | Promise<void>) | null = null
+	) {
 		super(app);
+		this.value = initial;
 	}
 
 	onOpen() {
-		this.titleEl.setText("Link this cell");
-		this.contentEl.createDiv({ cls: "ptb-modal-desc", text: `"${this.label}" will become the link's text.` });
+		const editing = this.onRemove !== null;
+		this.titleEl.setText(editing ? "Edit this cell's link" : "Link this cell");
+		this.contentEl.createDiv({
+			cls: "ptb-modal-desc",
+			text: editing
+				? `"${this.label}" is the link's text; this is where it points.`
+				: `"${this.label}" will become the link's text.`,
+		});
 		const input = this.contentEl.createEl("input", {
 			cls: "ptb-csv-input",
 			attr: { type: "text", placeholder: "https://example.com or a note name", spellcheck: "false" },
 		});
+		input.value = this.initial;
 		input.addEventListener("input", () => (this.value = input.value));
 		input.addEventListener("keydown", (e) => {
 			if (e.key !== "Enter") return;
@@ -4047,10 +4118,22 @@ class LinkCellModal extends Modal {
 			this.commit();
 		});
 		const btns = this.contentEl.createDiv({ cls: "ptb-modal-btns" });
-		const ok = btns.createEl("button", { cls: "mod-cta", text: "Link" });
+		// unlinking sits off on its own, away from the two buttons a hurried
+		// click lands on: it throws the URL away and Save is right there
+		if (this.onRemove) {
+			btns.createEl("button", { cls: "ptb-modal-far", text: "Remove link" }).addEventListener("click", () => {
+				this.close();
+				void this.onRemove?.();
+			});
+		}
+		const ok = btns.createEl("button", { cls: "mod-cta", text: editing ? "Save" : "Link" });
 		ok.addEventListener("click", () => this.commit());
 		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
-		window.setTimeout(() => input.focus(), 0);
+		// selected, not just focused: editing a link is usually replacing it
+		window.setTimeout(() => {
+			input.focus();
+			input.select();
+		}, 0);
 	}
 
 	private commit() {
