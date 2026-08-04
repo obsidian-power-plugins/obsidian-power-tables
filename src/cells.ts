@@ -924,26 +924,35 @@ export function emphasisWrap(text: string): { lead: number; trail: number } {
 	return { lead, trail };
 }
 
-export type CellLink = { label: string; url: string; wiki: boolean };
+/** "bare" is a URL typed straight into the cell with no markup at all, which
+ *  Obsidian still renders as a link. It has no label of its own: the text and
+ *  the target are the same string, so editing one moves both. */
+export type CellLinkKind = "md" | "wiki" | "bare";
+export type CellLink = { label: string; url: string; kind: CellLinkKind };
 
-/** Read a cell whose whole value is one link, in either markdown or wikilink
- *  form. A cell with text around the link does not count: rewriting one would
- *  mean guessing which part of the cell the user meant. */
+/** A cell whose whole value is one link, in any of the three forms a table
+ *  cell can hold one. A cell with text around the link does not count:
+ *  rewriting that would mean guessing which part the user meant. */
 export function parseCellLink(raw: string): CellLink | null {
 	const s = raw.trim();
 	const wiki = /^\[\[([^\]|]+)(?:\|([^\]]*))?\]\]$/.exec(s);
-	if (wiki) return { label: (wiki[2] ?? wiki[1]).trim(), url: wiki[1].trim(), wiki: true };
+	if (wiki) return { label: (wiki[2] ?? wiki[1]).trim(), url: wiki[1].trim(), kind: "wiki" };
 	// the target is matched greedily so a ")" of its own, as in a Wikipedia
 	// title, stays part of the URL instead of cutting it short
 	const md = /^\[([^\]]*)\]\((.*)\)$/.exec(s);
-	if (md) return { label: md[1].trim(), url: md[2].trim(), wiki: false };
+	if (md) return { label: md[1].trim(), url: md[2].trim(), kind: "md" };
+	// pasting a URL into a cell is how most of them get there, and the result
+	// is a working link with no brackets anywhere for a parser to find
+	if (/^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|www\.)[^\s|<>]+$/i.test(s)) return { label: s, url: s, kind: "bare" };
 	return null;
 }
 
-/** The markdown for a link. Editing a wikilink writes a wikilink back: the
- *  form a cell is already in is the form its author chose. */
-export function buildCellLink(label: string, url: string, wiki = false): string {
-	if (!wiki) return `[${label}](${url})`;
+/** The markdown for a link, in the flavor asked for. Editing a wikilink writes
+ *  a wikilink back, and a bare URL stays bare: the form a cell is already in is
+ *  the form its author chose. */
+export function buildCellLink(label: string, url: string, kind: CellLinkKind = "md"): string {
+	if (kind === "bare") return url;
+	if (kind === "md") return `[${label}](${url})`;
 	return label && label !== url ? `[[${url}|${label}]]` : `[[${url}]]`;
 }
 

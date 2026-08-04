@@ -475,8 +475,22 @@ eq(`${ew.lead}/${ew.trail}`, "0/0", "unbalanced markers untouched");
 	const md = parseCellLink("[Rob Prod](https://example.com/Rob-Prod)")!;
 	eq(md.label, "Rob Prod", "markdown link label");
 	eq(md.url, "https://example.com/Rob-Prod", "markdown link target");
-	eq(md.wiki, false, "markdown link is not a wikilink");
+	eq(md.kind, "md", "markdown link kind");
 }
+// A URL pasted straight in is the way most link cells actually get made, and
+// reading it as plain text is what left "Edit link" with nothing to edit.
+{
+	const b = parseCellLink("www.example.com/Rob-Prod")!;
+	eq(b.url, "www.example.com/Rob-Prod", "a bare www URL is a link");
+	eq(b.label, "www.example.com/Rob-Prod", "a bare URL is its own label");
+	eq(b.kind, "bare", "bare link kind");
+}
+eq(parseCellLink("https://example.com")!.kind, "bare", "a bare https URL is a link");
+eq(parseCellLink("mailto:steve@example.com")!.kind, "bare", "so is a mailto");
+eq(parseCellLink("obsidian://open?vault=x")!.kind, "bare", "and any other scheme");
+ok(parseCellLink("545.60") === null, "a number is not a bare URL");
+ok(parseCellLink("www.example.com and more") === null, "a bare URL with text after it is left alone");
+eq(buildCellLink("x", "https://new.example.com", "bare"), "https://new.example.com", "a bare link stays bare");
 {
 	// the old regex ended the URL at the first ")" and so decided this was not
 	// a link at all, which turned "edit the link" into "wrap it in a second one"
@@ -487,7 +501,7 @@ eq(`${ew.lead}/${ew.trail}`, "0/0", "unbalanced markers untouched");
 	const w = parseCellLink("[[Weekly Notes]]")!;
 	eq(w.url, "Weekly Notes", "bare wikilink target");
 	eq(w.label, "Weekly Notes", "bare wikilink labels itself");
-	eq(w.wiki, true, "wikilink flagged as one");
+	eq(w.kind, "wiki", "wikilink kind");
 }
 {
 	const w = parseCellLink("[[Weekly Notes|This week]]")!;
@@ -498,16 +512,17 @@ ok(parseCellLink("plain text") === null, "plain text is not a link");
 ok(parseCellLink("see [the note](x.md) for more") === null, "a link with text around it is left alone");
 ok(parseCellLink("[[]]") === null, "an empty wikilink is not a link");
 eq(buildCellLink("Rob Prod", "https://example.com"), "[Rob Prod](https://example.com)", "builds a markdown link");
-eq(buildCellLink("This week", "Weekly Notes", true), "[[Weekly Notes|This week]]", "builds an aliased wikilink");
-eq(buildCellLink("Weekly Notes", "Weekly Notes", true), "[[Weekly Notes]]", "a label equal to the target needs no alias");
+eq(buildCellLink("This week", "Weekly Notes", "wiki"), "[[Weekly Notes|This week]]", "builds an aliased wikilink");
+eq(buildCellLink("Weekly Notes", "Weekly Notes", "wiki"), "[[Weekly Notes]]", "a label equal to the target needs no alias");
 {
 	// round-tripping is what "edit the link" does: parse, swap the target,
 	// build. Neither the label nor the flavor may drift on the way through.
-	const before = "[[Weekly Notes|This week]]";
-	const p = parseCellLink(before)!;
-	eq(buildCellLink(p.label, p.url, p.wiki), before, "a wikilink survives a parse/build round trip");
+	for (const before of ["[[Weekly Notes|This week]]", "[[Weekly Notes]]", "[Rob Prod](https://x.example.com)", "https://x.example.com"]) {
+		const p = parseCellLink(before)!;
+		eq(buildCellLink(p.label, p.url, p.kind), before, `${before} survives a parse/build round trip`);
+	}
 	const p2 = parseCellLink("[Rob Prod](https://old.example.com)")!;
-	eq(buildCellLink(p2.label, "https://new.example.com", p2.wiki), "[Rob Prod](https://new.example.com)", "editing swaps only the target");
+	eq(buildCellLink(p2.label, "https://new.example.com", p2.kind), "[Rob Prod](https://new.example.com)", "editing swaps only the target");
 }
 
 // --- planFormatNumber ---
