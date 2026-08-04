@@ -1010,8 +1010,10 @@ body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-nog
 span.ptb-hl {
 	border-radius: 3px;
 	padding: 0 3px;
-	/* Chromium only, so the prefixed form is the one that applies here */
-	-webkit-box-decoration-break: clone;
+	/* box-decoration-break: clone would round and pad each line fragment when a
+	   highlight wraps, but the directory flags the feature in either form, so it
+	   is gone. The cost is only visible on a highlight that spans lines inside
+	   one cell, where the padding lands at the ends rather than on each row. */
 }
 
 /* ---------- in-cell checkboxes rendered from [ ] / [x] ---------- */
