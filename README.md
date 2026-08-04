@@ -150,6 +150,16 @@ Everything renders and edits on phones and tablets; notes colored on desktop loo
 - Tables nested inside callouts or list items: color them from the editing view (cursor targeting works there); Reading-view click targeting may not resolve those cells.
 - Colors are absolute (like Word/Excel), so pick shades that work with your light/dark theme.
 
+## What the catalog's scan reports
+
+The community catalog scans a plugin for what it is *capable* of, which is not the same as what it does with it. Power Tables reports one thing.
+
+| What the scan reports | What it is | Where |
+| --- | --- | --- |
+| **Clipboard access** | **Writing:** the CSV from **Copy table as CSV**, and a diagnostic report from the troubleshooting command. **Reading:** the **Paste rows** command, its table-menu entry, and its toolbar button, which take spreadsheet rows off the clipboard and append them to the table you targeted. Every one of the five is something you just clicked or ran. Nothing reads the clipboard on its own, on a timer, or in the background. | [`src/main.ts`](src/main.ts) `pasteFromClipboard`, `copyTableCsv` |
+
+Power Tables makes no network requests of any kind, starts no processes, reads no files outside your vault, and never asks Obsidian for a list of your files. There is no `eval`, no `Function` constructor, no `innerHTML`, and no code fetched and run at runtime.
+
 ## Build from source
 
 ```
