@@ -924,6 +924,29 @@ export function emphasisWrap(text: string): { lead: number; trail: number } {
 	return { lead, trail };
 }
 
+export type CellLink = { label: string; url: string; wiki: boolean };
+
+/** Read a cell whose whole value is one link, in either markdown or wikilink
+ *  form. A cell with text around the link does not count: rewriting one would
+ *  mean guessing which part of the cell the user meant. */
+export function parseCellLink(raw: string): CellLink | null {
+	const s = raw.trim();
+	const wiki = /^\[\[([^\]|]+)(?:\|([^\]]*))?\]\]$/.exec(s);
+	if (wiki) return { label: (wiki[2] ?? wiki[1]).trim(), url: wiki[1].trim(), wiki: true };
+	// the target is matched greedily so a ")" of its own, as in a Wikipedia
+	// title, stays part of the URL instead of cutting it short
+	const md = /^\[([^\]]*)\]\((.*)\)$/.exec(s);
+	if (md) return { label: md[1].trim(), url: md[2].trim(), wiki: false };
+	return null;
+}
+
+/** The markdown for a link. Editing a wikilink writes a wikilink back: the
+ *  form a cell is already in is the form its author chose. */
+export function buildCellLink(label: string, url: string, wiki = false): string {
+	if (!wiki) return `[${label}](${url})`;
+	return label && label !== url ? `[[${url}|${label}]]` : `[[${url}]]`;
+}
+
 export type NumFmt = "auto" | "number" | "currency" | "percent" | "date";
 
 /** Cell-tag equivalents of the quick format buttons, for live calc/formula cells. */

@@ -83,6 +83,8 @@ import {
 	refInsertAllowed,
 	planFill,
 	mergeForSave,
+	parseCellLink,
+	buildCellLink,
 } from "../src/cells";
 
 /** Mirrors the vault applier in main.ts: edit line numbers are in original
@@ -463,6 +465,50 @@ ew = emphasisWrap("a **b** c");
 eq(`${ew.lead}/${ew.trail}`, "0/0", "partial emphasis untouched");
 ew = emphasisWrap("**750*");
 eq(`${ew.lead}/${ew.trail}`, "0/0", "unbalanced markers untouched");
+
+// --- cell links ---
+{
+	const md = parseCellLink("[Rob Prod](https://example.com/Rob-Prod")!;
+	ok(md === null, "an unclosed link is not a link");
+}
+{
+	const md = parseCellLink("[Rob Prod](https://example.com/Rob-Prod)")!;
+	eq(md.label, "Rob Prod", "markdown link label");
+	eq(md.url, "https://example.com/Rob-Prod", "markdown link target");
+	eq(md.wiki, false, "markdown link is not a wikilink");
+}
+{
+	// the old regex ended the URL at the first ")" and so decided this was not
+	// a link at all, which turned "edit the link" into "wrap it in a second one"
+	const md = parseCellLink("[Mercury](https://en.wikipedia.org/wiki/Mercury_(planet))")!;
+	eq(md.url, "https://en.wikipedia.org/wiki/Mercury_(planet)", "a URL may close a paren of its own");
+}
+{
+	const w = parseCellLink("[[Weekly Notes]]")!;
+	eq(w.url, "Weekly Notes", "bare wikilink target");
+	eq(w.label, "Weekly Notes", "bare wikilink labels itself");
+	eq(w.wiki, true, "wikilink flagged as one");
+}
+{
+	const w = parseCellLink("[[Weekly Notes|This week]]")!;
+	eq(w.url, "Weekly Notes", "aliased wikilink target");
+	eq(w.label, "This week", "aliased wikilink label");
+}
+ok(parseCellLink("plain text") === null, "plain text is not a link");
+ok(parseCellLink("see [the note](x.md) for more") === null, "a link with text around it is left alone");
+ok(parseCellLink("[[]]") === null, "an empty wikilink is not a link");
+eq(buildCellLink("Rob Prod", "https://example.com"), "[Rob Prod](https://example.com)", "builds a markdown link");
+eq(buildCellLink("This week", "Weekly Notes", true), "[[Weekly Notes|This week]]", "builds an aliased wikilink");
+eq(buildCellLink("Weekly Notes", "Weekly Notes", true), "[[Weekly Notes]]", "a label equal to the target needs no alias");
+{
+	// round-tripping is what "edit the link" does: parse, swap the target,
+	// build. Neither the label nor the flavor may drift on the way through.
+	const before = "[[Weekly Notes|This week]]";
+	const p = parseCellLink(before)!;
+	eq(buildCellLink(p.label, p.url, p.wiki), before, "a wikilink survives a parse/build round trip");
+	const p2 = parseCellLink("[Rob Prod](https://old.example.com)")!;
+	eq(buildCellLink(p2.label, "https://new.example.com", p2.wiki), "[Rob Prod](https://new.example.com)", "editing swaps only the target");
+}
 
 // --- planFormatNumber ---
 const NF = ["| A |", "| - |", "| 1644 |", "| $2 |", "| text |"];
