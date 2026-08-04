@@ -170,15 +170,6 @@ npm test        # unit tests for the table-rewrite logic
 
 `node_modules/` is build tooling only (TypeScript, esbuild, Obsidian API types). It is never shipped; the installed plugin is just `manifest.json`, `main.js`, and `styles.css` (about 31 KB total). You can delete `node_modules/` at any time and recreate it with `npm install`.
 
-## Publishing to the Obsidian community plugin directory
-
-1. Push this folder to a public GitHub repo (the `.gitignore` already keeps `node_modules/` and `main.js` out). `manifest.json`, `versions.json`, `LICENSE`, and `README.md` must be at the repo root.
-2. Run `npm run build`, then create a GitHub release whose **tag is exactly the version from manifest.json** (e.g. `1.13.1`, with no `v` prefix). Attach `manifest.json`, `main.js`, and `styles.css` to the release as individual files.
-3. Sign in at [community.obsidian.md](https://community.obsidian.md), link your GitHub account, then choose **Plugins > New plugin** and give it the repository URL. The directory reviews the release automatically and lists what it wants changed; fix those and cut a new release to have it look again. (Submissions used to be a pull request against `obsidian-releases`. They are not any more.)
-4. For later updates: bump `version` in `manifest.json` and `package.json`, add the entry to `versions.json`, rebuild, and cut a new release with the same three files. Installed users get the update automatically.
-
-Users installing from the community directory only ever download the three release files, never the repo or its build tooling.
-
 ## Support
 
 Power Tables is built and maintained by one person. If it earns a place in your

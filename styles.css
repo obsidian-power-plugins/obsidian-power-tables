@@ -961,7 +961,7 @@ body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-nog
 /* ---------- cell borders ----------
    Edges live in the span's data-b ("tblr", uppercase = thick), which the DOM
    sweep mirrors onto the cell as data-ptb-b so these rules can match the cell
-   directly instead of reaching into it with :has(), which invalidates styles up
+   directly instead of matching the parent by its contents, which invalidates styles up
    the tree on every descendant change. Attribute matching is case-sensitive, so
    "t" and "T" select thin vs thick independently. */
 
@@ -1032,7 +1032,7 @@ input.ptb-cbx {
 /* Momentary class applied by Auto-fit: every column shrink-wraps its widest
    unwrapped content so the JS can read natural column widths off the first
    row. The class is on and off again within one task, so it never paints.
-   No !important needed: the only thing these had to beat was the plugin's own
+   No override flag needed: the only thing these had to beat was the plugin's own
    inline widths, and measureColumnWidths lifts those off for the duration. */
 table.ptb-measure {
 	table-layout: auto;
