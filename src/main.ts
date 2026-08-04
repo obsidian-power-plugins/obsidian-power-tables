@@ -421,6 +421,8 @@ export default class PowerTablesPlugin extends Plugin {
 	 *  missed a table. Obsidian owns the context menu on a link, so this is how
 	 *  the handler filling that menu knows the link was in one of our cells. */
 	private rightPressCell: HTMLTableCellElement | null = null;
+	/** Set only for the length of a menu action, by withCell. */
+	private pinnedTarget: ClickTarget | null = null;
 	private outlined: HTMLElement | null = null;
 	private scanQueued = false;
 	private recalcTimers = new Map<string, number>();
@@ -1249,43 +1251,74 @@ export default class PowerTablesPlugin extends Plugin {
 	 *  cells. Both events also fire for links nowhere near a table, so the
 	 *  remembered press is the gate, and it is spent on the first menu it fills. */
 	private addLinkCellItems(menu: Menu) {
-		if (!this.rightPressCell) return;
+		const cell = this.rightPressCell;
 		this.rightPressCell = null;
+		if (!cell) return;
 		menu.addSeparator();
-		menu.addItem((i) => i.setTitle("Edit link…").setIcon("link").onClick(() => void this.linkCell()));
-		this.addStructureItems(menu);
+		menu.addItem((i) =>
+			i.setTitle("Edit link…").setIcon("link").onClick(() => void this.withCell(cell, () => this.linkCell()))
+		);
+		this.addStructureItems(menu, cell);
 	}
 
-	private addStructureItems(menu: Menu) {
-		menu.addItem((i) => i.setTitle("Insert row above").setIcon("arrow-up").onClick(() => void this.insertRow("above")));
-		menu.addItem((i) => i.setTitle("Insert row below").setIcon("arrow-down").onClick(() => void this.insertRow("below")));
-		menu.addItem((i) => i.setTitle("Insert column left").setIcon("arrow-left").onClick(() => void this.insertColumn("left")));
+	/**
+	 * Run a menu action against the cell its menu was raised over.
+	 *
+	 * Obsidian's table editor holds focus wherever it already was when a
+	 * right-click lands on a link, since the link's own menu is what that click
+	 * is for. resolveTarget reads that focused cell first and is right to, for
+	 * every other caller: it is the cell the user is actually working in. Here
+	 * it is the last cell they typed in, which can be anywhere in the note, so
+	 * the action has to be told the cell instead of asking for it.
+	 */
+	private async withCell(cell: HTMLTableCellElement | null, fn: () => unknown) {
+		const tgt = cell ? this.targetFromCell(cell) ?? (await this.fallbackTargetFromCell(cell)) : null;
+		if (!tgt) {
+			await fn();
+			return;
+		}
+		this.pinnedTarget = tgt;
+		try {
+			// Only the synchronous prefix needs the pin. Every action either
+			// finishes here or resolves its target and hands it to a dialog,
+			// which is the pinning the dialogs already do for themselves.
+			await fn();
+		} finally {
+			this.pinnedTarget = null;
+		}
+	}
+
+	private addStructureItems(menu: Menu, cell: HTMLTableCellElement | null = null) {
+		const run = (fn: () => unknown) => void this.withCell(cell, fn);
+		menu.addItem((i) => i.setTitle("Insert row above").setIcon("arrow-up").onClick(() => run(() => this.insertRow("above"))));
+		menu.addItem((i) => i.setTitle("Insert row below").setIcon("arrow-down").onClick(() => run(() => this.insertRow("below"))));
+		menu.addItem((i) => i.setTitle("Insert column left").setIcon("arrow-left").onClick(() => run(() => this.insertColumn("left"))));
 		menu.addItem((i) =>
-			i.setTitle("Insert column right").setIcon("arrow-right").onClick(() => void this.insertColumn("right"))
+			i.setTitle("Insert column right").setIcon("arrow-right").onClick(() => run(() => this.insertColumn("right")))
 		);
-		menu.addItem((i) => i.setTitle("Duplicate row").setIcon("copy").onClick(() => void this.duplicateRow()));
+		menu.addItem((i) => i.setTitle("Duplicate row").setIcon("copy").onClick(() => run(() => this.duplicateRow())));
 		menu.addItem((i) =>
-			i.setTitle("Fill down").setIcon("arrow-down-to-line").onClick(() => void this.fill("down"))
+			i.setTitle("Fill down").setIcon("arrow-down-to-line").onClick(() => run(() => this.fill("down")))
 		);
 		menu.addItem((i) =>
-			i.setTitle("Fill right").setIcon("arrow-right-to-line").onClick(() => void this.fill("right"))
+			i.setTitle("Fill right").setIcon("arrow-right-to-line").onClick(() => run(() => this.fill("right")))
 		);
 		menu.addItem((i) =>
-			i.setTitle("Edit value / formula…").setIcon("function-square").onClick(() => this.openFormulaModal())
+			i.setTitle("Edit value / formula…").setIcon("function-square").onClick(() => run(() => this.openFormulaModal()))
 		);
-		menu.addItem((i) => i.setTitle("Clear cell contents").setIcon("eraser").onClick(() => void this.clearContents(null)));
+		menu.addItem((i) => i.setTitle("Clear cell contents").setIcon("eraser").onClick(() => run(() => this.clearContents(null))));
 		menu.addItem((i) =>
-			i.setTitle("Auto-fit column widths").setIcon("chevrons-right-left").onClick(() => void this.autoFitColumnWidths())
-		);
-		menu.addItem((i) =>
-			i.setTitle("Reset column width").setIcon("move-horizontal").onClick(() => void this.resetColumnWidth())
+			i.setTitle("Auto-fit column widths").setIcon("chevrons-right-left").onClick(() => run(() => this.autoFitColumnWidths()))
 		);
 		menu.addItem((i) =>
-			i.setTitle("Prettify table").setIcon("align-justify").onClick(() => void this.prettifyTable())
+			i.setTitle("Reset column width").setIcon("move-horizontal").onClick(() => run(() => this.resetColumnWidth()))
+		);
+		menu.addItem((i) =>
+			i.setTitle("Prettify table").setIcon("align-justify").onClick(() => run(() => this.prettifyTable()))
 		);
 		menu.addSeparator();
-		menu.addItem((i) => i.setTitle("Delete row").setIcon("trash").onClick(() => void this.deleteRow()));
-		menu.addItem((i) => i.setTitle("Delete column").setIcon("trash-2").onClick(() => void this.deleteColumn()));
+		menu.addItem((i) => i.setTitle("Delete row").setIcon("trash").onClick(() => run(() => this.deleteRow())));
+		menu.addItem((i) => i.setTitle("Delete column").setIcon("trash-2").onClick(() => run(() => this.deleteColumn())));
 	}
 
 	private setOutline(el: HTMLElement | null) {
@@ -1295,6 +1328,12 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	resolveTarget(silent = false): CellTarget | null {
+		// A menu action pins the cell its menu was raised over, and that beats
+		// every live reading below: see withCell for why the live ones are wrong
+		// for exactly that case.
+		if (this.pinnedTarget) {
+			return { ...this.pinnedTarget, editor: this.editorForPath(this.pinnedTarget.path), fromCursor: false };
+		}
 		// The sidebar is a workspace leaf, so clicking its buttons makes IT the
 		// active view, fall back to the most recent note leaf in that case.
 		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1716,11 +1755,20 @@ export default class PowerTablesPlugin extends Plugin {
 				this.app,
 				link.label,
 				link.url,
-				async (url) => void (await this.commitCellValue(buildCellLink(link.label, url, link.wiki), t)),
-				async () => {
-					await this.commitCellValue(link.label, t);
-					new Notice("Link removed; the text stays.");
-				}
+				async (url) => {
+					// a bare URL is its own text, so pointing it somewhere else
+					// has to move both or the cell would still read as the old one
+					const label = link.kind === "bare" ? url : link.label;
+					await this.commitCellValue(buildCellLink(label, url, link.kind), t);
+				},
+				// nothing to unlink on a bare URL: stripping the markup off it
+				// would leave the same string it already is
+				link.kind === "bare"
+					? null
+					: async () => {
+							await this.commitCellValue(link.label, t);
+							new Notice("Link removed; the text stays.");
+						}
 			).open();
 			return;
 		}
@@ -4081,7 +4129,7 @@ function floatModal(m: Modal) {
 }
 
 /** Ask for a link target. The cell's own text becomes the label, so the only
- *  thing left to supply is where it points. Passing onRemove turns the dialog
+ *  thing left to supply is where it points. An initial target turns the dialog
  *  into the editor for a link the cell already has. */
 class LinkCellModal extends Modal {
 	private value: string;
@@ -4098,13 +4146,18 @@ class LinkCellModal extends Modal {
 	}
 
 	onOpen() {
-		const editing = this.onRemove !== null;
+		const editing = this.initial !== "";
+		// a cell holding a plain URL has no separate label to talk about: the
+		// text is the target, and changing one changes the other
+		const selfTitled = editing && this.label === this.initial;
 		this.titleEl.setText(editing ? "Edit this cell's link" : "Link this cell");
 		this.contentEl.createDiv({
 			cls: "ptb-modal-desc",
-			text: editing
-				? `"${this.label}" is the link's text; this is where it points.`
-				: `"${this.label}" will become the link's text.`,
+			text: selfTitled
+				? "This cell is a plain URL, so whatever you point it at is also what it reads."
+				: editing
+					? `"${this.label}" is the link's text; this is where it points.`
+					: `"${this.label}" will become the link's text.`,
 		});
 		const input = this.contentEl.createEl("input", {
 			cls: "ptb-csv-input",
