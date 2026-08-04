@@ -116,6 +116,7 @@ import {
 	mergeForSave,
 	parseCellLink,
 	buildCellLink,
+	columnAlign,
 } from "./cells";
 
 /** A resolved action target. Dialogs pin one at open so clicks that land
@@ -1755,13 +1756,8 @@ export default class PowerTablesPlugin extends Plugin {
 				this.app,
 				link.label,
 				link.url,
-				async (url) => {
-					// a bare URL is its own text, so pointing it somewhere else
-					// has to move both or the cell would still read as the old one
-					const label = link.kind === "bare" ? url : link.label;
-					await this.commitCellValue(buildCellLink(label, url, link.kind), t);
-				},
-				// nothing to unlink on a bare URL: stripping the markup off it
+				async (text, url) => void (await this.commitCellValue(buildCellLink(text, url, link.kind), t)),
+				// nothing to unlink on a plain URL: stripping the markup off it
 				// would leave the same string it already is
 				link.kind === "bare"
 					? null
@@ -1776,8 +1772,8 @@ export default class PowerTablesPlugin extends Plugin {
 			new Notice("Power Tables: put some text in the cell first, then link it.");
 			return;
 		}
-		new LinkCellModal(this.app, raw, "", async (url) => {
-			await this.commitCellValue(buildCellLink(raw, url), t);
+		new LinkCellModal(this.app, raw, "", async (text, url) => {
+			await this.commitCellValue(buildCellLink(text, url), t);
 		}).open();
 	}
 
@@ -2684,6 +2680,39 @@ export default class PowerTablesPlugin extends Plugin {
 		menu.showAtPosition(this.menuAnchor(evt));
 	}
 
+	/** The three column alignments, with the one the column already carries
+	 *  ticked. Nothing is ticked on a column nobody has aligned: markdown
+	 *  renders that left, but it is not the same source as left. */
+	showAlignMenu(evt: MouseEvent) {
+		const cur = this.currentColumnAlign();
+		const defs: [ColAlign, string, string][] = [
+			["left", "Align left", "align-left"],
+			["center", "Align center", "align-center"],
+			["right", "Align right", "align-right"],
+		];
+		const menu = new Menu();
+		for (const [align, label, icon] of defs) {
+			menu.addItem((i) =>
+				i
+					.setTitle(label)
+					.setIcon(icon)
+					.setChecked(cur === align)
+					.onClick(() => void this.alignColumn(align))
+			);
+		}
+		menu.showAtPosition(this.menuAnchor(evt));
+	}
+
+	/** The alignment written on the targeted column, for the menu's tick and
+	 *  the collapsed button's icon. */
+	currentColumnAlign(target?: CellTarget | null): ColAlign | null {
+		const t = target ?? this.resolveTarget(true);
+		if (!t) return null;
+		const ed = t.editor ?? this.editorForPath(t.path);
+		if (!ed) return null;
+		return columnAlign(ed.getValue().split("\n"), t);
+	}
+
 	/** Structure: the things that change the table's shape. */
 	showTableMenu(evt: MouseEvent) {
 		const menu = new Menu();
@@ -3517,6 +3546,11 @@ class PanelUI {
 
 	private popClose: ((e: MouseEvent) => void) | null = null;
 	private scopeLabel: HTMLElement | null = null;
+	private alignBtn: HTMLButtonElement | null = null;
+	private alignIcon: HTMLElement | null = null;
+	/** Where the bar wants the colors button, reserved mid-row while the icons
+	 *  are laid out and filled in later by buildColorsAndNumbers. */
+	private colorSlot: HTMLElement | null = null;
 
 	private guard(b: HTMLElement) {
 		b.addEventListener("mousedown", (e) => e.preventDefault());
@@ -3638,9 +3672,12 @@ class PanelUI {
 			// Apply-to reads first because it governs nearly everything after it:
 			// bold, alignment, borders, colors, number formats and Clear values
 			// all act at whatever this says.
+			// no icon: the word is the label, and a crosshair beside it was one
+			// more thing competing for width without saying anything the word
+			// does not already say
 			const scope = this.dropBtn(
 				trow,
-				"crosshair",
+				null,
 				"Cell",
 				"What the buttons after this act on: the targeted cell, its whole row, or its whole column",
 				(e) => this.plugin.showScopeMenu(e)
@@ -3654,9 +3691,11 @@ class PanelUI {
 			void this.plugin.styleText("strike", e)
 		);
 		trow.createDiv({ cls: "ptb-vsep" });
-		this.iconBtn(trow, "align-left", "Align column left", () => void this.plugin.alignColumn("left"));
-		this.iconBtn(trow, "align-center", "Align column center", () => void this.plugin.alignColumn("center"));
-		this.iconBtn(trow, "align-right", "Align column right", () => void this.plugin.alignColumn("right"));
+		// three buttons to set one of three states, only one of which can be on:
+		// that is a dropdown, and it costs a third of the width. The icon tracks
+		// the column so the collapsed control still reports what it collapsed.
+		this.alignBtn = this.dropBtn(trow, "align-left", null, "Column alignment", (e) => this.plugin.showAlignMenu(e));
+		this.alignIcon = this.alignBtn.querySelector(".ptb-btnic");
 		trow.createDiv({ cls: "ptb-vsep" });
 		this.iconBtn(trow, "layout-grid", "Borders (follows Apply to)", (e) => this.plugin.showBordersMenu(e));
 		this.iconBtn(
@@ -3670,6 +3709,10 @@ class PanelUI {
 			this.iconBtn(trow, "highlighter", "Highlight with the last highlight color (follows Apply to)", (e) =>
 				void this.plugin.applyLastColor("hl", e)
 			);
+			// the colors open here rather than at the end of the row: highlight
+			// is one of the three things in that popover, so the two belong side
+			// by side instead of with a paintbrush and a link between them
+			this.colorSlot = trow.createDiv({ cls: "ptb-colorwrap" });
 			this.iconBtn(
 				trow,
 				"paintbrush",
@@ -3710,8 +3753,9 @@ class PanelUI {
 		let colorHost = root;
 		if (this.layout === "bar") {
 			// a three-row swatch grid is not a toolbar control, so the whole
-			// section moves behind one button and opens over the table
-			const wrap = root.createDiv({ cls: "ptb-colorwrap" });
+			// section moves behind one button and opens over the table. The bar
+			// reserves its slot mid-row, beside highlight; anything else appends.
+			const wrap = this.colorSlot ?? root.createDiv({ cls: "ptb-colorwrap" });
 			const trigger = wrap.createEl("button", { cls: "ptb-iconbtn", attr: { title: "Colors", "aria-label": "Colors" } });
 			setIcon(trigger, "palette");
 			this.guard(trigger);
@@ -3839,11 +3883,13 @@ class PanelUI {
 	}
 
 	/** A labelled button with a chevron: opens a menu rather than acting. */
-	private dropBtn(parent: HTMLElement, icon: string, label: string, tip: string, fn: (e: MouseEvent) => void) {
+	/** Icon and label are both optional: on a narrow window every control that
+	 *  can say what it is with one of the two should only spend one. */
+	private dropBtn(parent: HTMLElement, icon: string | null, label: string | null, tip: string, fn: (e: MouseEvent) => void) {
 		const b = parent.createEl("button", { cls: "ptb-iconbtn ptb-dropbtn", attr: { "aria-label": tip, title: tip } });
-		const ic = b.createSpan({ cls: "ptb-btnic" });
-		setIcon(ic, icon);
-		b.createSpan({ cls: "ptb-droplabel", text: label });
+		if (icon) setIcon(b.createSpan({ cls: "ptb-btnic" }), icon);
+		if (label !== null) b.createSpan({ cls: "ptb-droplabel", text: label });
+		else b.addClass("ptb-dropicon");
 		const caret = b.createSpan({ cls: "ptb-dropcaret" });
 		setIcon(caret, "chevron-down");
 		this.guard(b);
@@ -3960,6 +4006,11 @@ class PanelUI {
 		const selected = this.plugin.selectionDisplay();
 		this.fxTarget = selected?.target ?? this.plugin.resolveTarget(true);
 		this.fxTableEl = this.plugin.targetTableEl();
+		if (this.alignIcon) {
+			// an unaligned column shows the left icon, because that is what it
+			// renders as; the menu is where the difference is still visible
+			setIcon(this.alignIcon, `align-${this.plugin.currentColumnAlign(this.fxTarget) ?? "left"}`);
+		}
 		const ref = selected ?? this.plugin.currentRef(this.fxTarget);
 		if (ref) {
 			this.refEl.setText(ref.ref);
@@ -4128,72 +4179,68 @@ function floatModal(m: Modal) {
 	});
 }
 
-/** Ask for a link target. The cell's own text becomes the label, so the only
- *  thing left to supply is where it points. An initial target turns the dialog
- *  into the editor for a link the cell already has. */
+/** The two halves of a link, on the two lines every other editor writes them
+ *  on: what the cell reads as, and where clicking it goes. An address to start
+ *  from turns the dialog into the editor for a link the cell already has. */
 class LinkCellModal extends Modal {
-	private value: string;
-
 	constructor(
 		app: App,
-		private label: string,
-		private initial: string,
-		private onDone: (url: string) => void | Promise<void>,
+		private text: string,
+		private url: string,
+		private onDone: (text: string, url: string) => void | Promise<void>,
 		private onRemove: (() => void | Promise<void>) | null = null
 	) {
 		super(app);
-		this.value = initial;
 	}
 
 	onOpen() {
-		const editing = this.initial !== "";
-		// a cell holding a plain URL has no separate label to talk about: the
-		// text is the target, and changing one changes the other
-		const selfTitled = editing && this.label === this.initial;
-		this.titleEl.setText(editing ? "Edit this cell's link" : "Link this cell");
-		this.contentEl.createDiv({
-			cls: "ptb-modal-desc",
-			text: selfTitled
-				? "This cell is a plain URL, so whatever you point it at is also what it reads."
-				: editing
-					? `"${this.label}" is the link's text; this is where it points.`
-					: `"${this.label}" will become the link's text.`,
-		});
-		const input = this.contentEl.createEl("input", {
-			cls: "ptb-csv-input",
-			attr: { type: "text", placeholder: "https://example.com or a note name", spellcheck: "false" },
-		});
-		input.value = this.initial;
-		input.addEventListener("input", () => (this.value = input.value));
-		input.addEventListener("keydown", (e) => {
-			if (e.key !== "Enter") return;
-			e.preventDefault();
-			this.commit();
-		});
+		const editing = this.url !== "";
+		this.modalEl.addClass("ptb-linkmodal");
+		this.titleEl.setText(editing ? "Edit link" : "Link this cell");
+		const fields = this.contentEl.createDiv({ cls: "ptb-fields" });
+		this.field(fields, "Text to display", this.text, "What the cell reads", (v) => (this.text = v));
+		const addr = this.field(fields, "Address", this.url, "https://example.com or a note name", (v) => (this.url = v));
 		const btns = this.contentEl.createDiv({ cls: "ptb-modal-btns" });
 		// unlinking sits off on its own, away from the two buttons a hurried
-		// click lands on: it throws the URL away and Save is right there
+		// click lands on: it throws the address away and Save is right there
 		if (this.onRemove) {
 			btns.createEl("button", { cls: "ptb-modal-far", text: "Remove link" }).addEventListener("click", () => {
 				this.close();
 				void this.onRemove?.();
 			});
 		}
-		const ok = btns.createEl("button", { cls: "mod-cta", text: editing ? "Save" : "Link" });
-		ok.addEventListener("click", () => this.commit());
+		btns.createEl("button", { cls: "mod-cta", text: editing ? "Save" : "Link" }).addEventListener("click", () =>
+			this.commit()
+		);
 		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
-		// selected, not just focused: editing a link is usually replacing it
+		// the address, selected: the text is already whatever the cell said, so
+		// the address is the half anyone opening this came to change
 		window.setTimeout(() => {
-			input.focus();
-			input.select();
+			addr.focus();
+			addr.select();
 		}, 0);
 	}
 
+	private field(host: HTMLElement, label: string, value: string, placeholder: string, onInput: (v: string) => void) {
+		host.createEl("label", { text: label });
+		const input = host.createEl("input", { attr: { type: "text", placeholder, spellcheck: "false" } });
+		input.value = value;
+		input.addEventListener("input", () => onInput(input.value));
+		input.addEventListener("keydown", (e) => {
+			if (e.key !== "Enter") return;
+			e.preventDefault();
+			this.commit();
+		});
+		return input;
+	}
+
 	private commit() {
-		const url = this.value.trim();
+		const url = this.url.trim();
 		if (!url) return;
 		this.close();
-		void this.onDone(url);
+		// an emptied text field means the address speaks for itself, which is
+		// also the one case a plain URL stays a plain URL
+		void this.onDone(this.text.trim() || url, url);
 	}
 }
 

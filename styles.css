@@ -765,6 +765,28 @@ button.ptb-databtn:hover {
 	margin-right: auto;
 }
 
+/* two short fields and three buttons: sized to that, not to the reading pane */
+.ptb-linkmodal {
+	max-width: 480px;
+}
+
+.ptb-fields {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	align-items: center;
+	gap: 8px 10px;
+}
+
+.ptb-fields label {
+	color: var(--text-muted);
+	font-size: 12.5px;
+	white-space: nowrap;
+}
+
+.ptb-fields input {
+	width: 100%;
+}
+
 .ptb-modal-desc {
 	color: var(--text-muted);
 	font-size: 12.5px;
@@ -1369,6 +1391,13 @@ button.ptb-dropbtn {
 .ptb-dropbtn .ptb-btnic svg {
 	width: 13px;
 	height: 13px;
+}
+
+/* a dropdown with no label is standing in for the icon buttons beside it, so
+   its icon carries their weight rather than a label's */
+.ptb-dropbtn.ptb-dropicon .ptb-btnic svg {
+	width: 14px;
+	height: 14px;
 }
 
 /* a labelled button sitting among icon buttons needs a touch more breathing
