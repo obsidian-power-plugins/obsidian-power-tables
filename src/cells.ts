@@ -861,21 +861,47 @@ export function planTextStyle(lines: string[], target: CellTargetLoc, style: Tex
 
 export type ColAlign = "left" | "center" | "right";
 
-/** Set the markdown alignment (delimiter-row colons) for the target's column. */
-export function planAlign(lines: string[], target: CellTargetLoc, align: ColAlign): EditPlan | null {
-	const ln = locateLine(lines, target);
-	if (ln == null) return null;
+/** The |---| row of the table holding this line, or -1 when it has none. */
+function delimIndexAt(lines: string[], ln: number): number {
 	let start = ln;
 	let end = ln;
 	while (start > 0 && parseRow(lines[start - 1])) start--;
 	while (end < lines.length - 1 && parseRow(lines[end + 1])) end++;
-	let delimIdx = -1;
 	for (let i = start; i <= end; i++) {
-		if (parseRow(lines[i])?.isDelim) {
-			delimIdx = i;
-			break;
-		}
+		if (parseRow(lines[i])?.isDelim) return i;
 	}
+	return -1;
+}
+
+/**
+ * The alignment written on the target's column, or null when its delimiter
+ * carries no colons.
+ *
+ * Unmarked and left are different source even though markdown renders them the
+ * same, and a menu that ticks one of three boxes has to be describing the
+ * source: ticking "Align left" on a column nobody has aligned would say an
+ * edit had already been made when none has.
+ */
+export function columnAlign(lines: string[], target: CellTargetLoc): ColAlign | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const delimIdx = delimIndexAt(lines, ln);
+	if (delimIdx < 0) return null;
+	const r = parseRow(lines[delimIdx])!;
+	const cell = r.pieces[Math.min(target.col, r.cellCount - 1) + 1].trim();
+	const lead = cell.startsWith(":");
+	const trail = cell.endsWith(":");
+	if (lead && trail) return "center";
+	if (lead) return "left";
+	if (trail) return "right";
+	return null;
+}
+
+/** Set the markdown alignment (delimiter-row colons) for the target's column. */
+export function planAlign(lines: string[], target: CellTargetLoc, align: ColAlign): EditPlan | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const delimIdx = delimIndexAt(lines, ln);
 	if (delimIdx < 0) return null;
 	const r = parseRow(lines[delimIdx])!;
 	const col = Math.min(target.col, r.cellCount - 1);
@@ -948,12 +974,13 @@ export function parseCellLink(raw: string): CellLink | null {
 }
 
 /** The markdown for a link, in the flavor asked for. Editing a wikilink writes
- *  a wikilink back, and a bare URL stays bare: the form a cell is already in is
- *  the form its author chose. */
+ *  a wikilink back: the form a cell is already in is the form its author chose. */
 export function buildCellLink(label: string, url: string, kind: CellLinkKind = "md"): string {
-	if (kind === "bare") return url;
-	if (kind === "md") return `[${label}](${url})`;
-	return label && label !== url ? `[[${url}|${label}]]` : `[[${url}]]`;
+	if (kind === "wiki") return label && label !== url ? `[[${url}|${label}]]` : `[[${url}]]`;
+	// a plain URL is only plain while it is its own text; giving it text of its
+	// own is exactly what turns it into a link with a label
+	if (kind === "bare" && label === url) return url;
+	return `[${label}](${url})`;
 }
 
 export type NumFmt = "auto" | "number" | "currency" | "percent" | "date";

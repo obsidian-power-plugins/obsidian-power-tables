@@ -85,6 +85,7 @@ import {
 	mergeForSave,
 	parseCellLink,
 	buildCellLink,
+	columnAlign,
 } from "../src/cells";
 
 /** Mirrors the vault applier in main.ts: edit line numbers are in original
@@ -450,6 +451,23 @@ eq(alignToLogical("left", true), "end", "left is end in RTL");
 eq(alignToLogical("right", true), "start", "right is start in RTL");
 eq(alignToLogical("center", true), "center", "center is direction-independent");
 
+// what the condensed alignment menu ticks
+{
+	const A = ["| A | B | C | D |", "| :--- | :---: | ---: | --- |", "| 1 | 2 | 3 | 4 |"];
+	const at = (col: number) => columnAlign(A, { line: 2, col, expect: null });
+	eq(at(0), "left", "a leading colon reads as left");
+	eq(at(1), "center", "colons both ends read as center");
+	eq(at(2), "right", "a trailing colon reads as right");
+	eq(at(3), null, "an unmarked column has no alignment to tick");
+	eq(columnAlign(["| A |", "| 1 |"], { line: 1, col: 0, expect: null }), null, "a table with no delimiter row has none either");
+	// the reader and the writer have to agree, or the menu ticks the box the
+	// button it just ran did not fill
+	for (const want of ["left", "center", "right"] as const) {
+		const after = applyPlan(A.slice(), planAlign(A.slice(), { line: 2, col: 3, expect: null }, want));
+		eq(columnAlign(after, { line: 2, col: 3, expect: null }), want, `planAlign ${want} reads back as ${want}`);
+	}
+}
+
 // --- emphasisWrap ---
 let ew = emphasisWrap("**750**");
 eq(`${ew.lead}/${ew.trail}`, "2/2", "bold wrap");
@@ -490,7 +508,11 @@ eq(parseCellLink("mailto:steve@example.com")!.kind, "bare", "so is a mailto");
 eq(parseCellLink("obsidian://open?vault=x")!.kind, "bare", "and any other scheme");
 ok(parseCellLink("545.60") === null, "a number is not a bare URL");
 ok(parseCellLink("www.example.com and more") === null, "a bare URL with text after it is left alone");
-eq(buildCellLink("x", "https://new.example.com", "bare"), "https://new.example.com", "a bare link stays bare");
+{
+	const u = "https://new.example.com";
+	eq(buildCellLink(u, u, "bare"), u, "a plain URL that is still its own text stays plain");
+	eq(buildCellLink("Our site", u, "bare"), `[Our site](${u})`, "giving a plain URL text of its own makes it a real link");
+}
 {
 	// the old regex ended the URL at the first ")" and so decided this was not
 	// a link at all, which turned "edit the link" into "wrap it in a second one"
