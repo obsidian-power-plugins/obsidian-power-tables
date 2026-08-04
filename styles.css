@@ -760,6 +760,11 @@ button.ptb-databtn:hover {
 	margin-top: 12px;
 }
 
+/* holds a button at the far end of the row, away from the confirm/cancel pair */
+.ptb-modal-btns .ptb-modal-far {
+	margin-right: auto;
+}
+
 .ptb-modal-desc {
 	color: var(--text-muted);
 	font-size: 12.5px;
