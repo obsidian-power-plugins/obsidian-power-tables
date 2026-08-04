@@ -23,13 +23,23 @@ import { Facet, RangeSetBuilder, StateEffect } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import {
 	BorderAction,
+	BORDER_COLORS,
+	BorderColor,
+	Edge,
+	EdgeWeight,
 	CalcFn,
 	CalcSpec,
 	ColAlign,
 	DATE_PATTERNS,
 	DateParts,
 	EditPlan,
+	FMT_DEFAULTS,
 	FmtSpec,
+	FORMULA_FUNCTIONS,
+	cellTextParts,
+	applyCompletion,
+	completionsAt,
+	refInsertAllowed,
 	NegStyle,
 	NumFmt,
 	Patch,
@@ -46,6 +56,7 @@ import {
 	fmtFromTag,
 	fmtToTag,
 	formatBySpec,
+	formatPiece,
 	formatDateSpec,
 	formatTimeSpec,
 	locateLine,
@@ -53,6 +64,8 @@ import {
 	parseNumeric,
 	parseTimeCell,
 	planBorders,
+	planDrawBorders,
+	planFill,
 	planFormatCells,
 	planMulti,
 	planStickyFormat,
@@ -152,6 +165,11 @@ interface PowerTablesSettings {
 	fmtModalY: number | null;
 	openOnStart: boolean;
 	cellRefs: boolean;
+	/** Dock the formatting + formula strip over a table while the cursor is in one. */
+	tableBar: boolean;
+	/** Draw Borders pen: the style it lays down and the colour it uses. */
+	penStyle: string;
+	penColor: string;
 }
 
 const DEFAULT_SETTINGS: PowerTablesSettings = {
@@ -182,6 +200,9 @@ const DEFAULT_SETTINGS: PowerTablesSettings = {
 	fmtModalY: null,
 	openOnStart: false,
 	cellRefs: true,
+	tableBar: true,
+	penStyle: "thin",
+	penColor: "default",
 };
 
 /** Marks editor states that already carry the tag-hider, so sub-editor injection never doubles it. */
@@ -392,11 +413,19 @@ export default class PowerTablesPlugin extends Plugin {
 	private scanQueued = false;
 	private recalcTimers = new Map<string, number>();
 	private panels = new Set<PanelUI>();
+	private tableBars = new Map<MarkdownView, TableBar>();
+	/** The look the format painter is holding, or null when it is off. */
+	private painter: Patch | null = null;
+	private painterFrom: { line: number; col: number } | null = null;
+	/** The armed border-drawing tool, or null. */
+	private pen: { tool: "border" | "grid" | "erase" } | null = null;
+	private stickySel: ReturnType<PowerTablesPlugin["readWidgetSelection"]> = null;
 	private autoRevealed = false;
 	private resizing: { th: HTMLElement; startX: number; startW: number; moved: boolean } | null = null;
 	private edgeHover: HTMLElement | null = null;
 	private statsEl: HTMLElement | null = null;
 	private statsText!: HTMLElement;
+	private statsSum!: HTMLElement;
 	/** Selection snapshot backing the stats chip; the Insert press consumes it. */
 	private statsSel: ReturnType<PowerTablesPlugin["widgetSelection"]> = null;
 	fmtModal: FormatCellsModal | null = null;
@@ -424,6 +453,16 @@ export default class PowerTablesPlugin extends Plugin {
 			id: "fill-last", icon: "paint-bucket",
 			name: "Fill with last color",
 			callback: () => this.applyLastColor("fill"),
+		});
+		this.addCommand({
+			id: "fill-down", icon: "arrow-down-to-line",
+			name: "Fill down",
+			callback: () => void this.fill("down"),
+		});
+		this.addCommand({
+			id: "fill-right", icon: "arrow-right-to-line",
+			name: "Fill right",
+			callback: () => void this.fill("right"),
 		});
 		this.addCommand({
 			id: "text-last", icon: "type",
@@ -682,15 +721,43 @@ export default class PowerTablesPlugin extends Plugin {
 		// Live Preview cell focus: the widget assigns its focused cell before
 		// focusing the cell editor, so a bubbling focusin always reads the NEW
 		// cell, click handlers fire too early and lag one cell behind.
+		// A press inside a table begins a fresh selection, so the remembered one
+		// stops being the answer. A press anywhere else in the note leaves the
+		// table altogether, which has to clear the last-clicked cell too: that
+		// is what resolveTarget falls back on, and a stale one kept the table
+		// bar up over prose. A press on our own bar, panel or a menu is neither.
+		this.registerDomEvent(
+			document,
+			"pointerdown",
+			(evt) => {
+				if (!(evt.target instanceof Element)) return;
+				if (evt.target.closest(".ptb-panel, .ptb-toolbar, .ptb-tablebar, .ptb-stats, .menu, .modal")) return;
+				if (evt.target.closest(".cm-table-widget, td, th")) this.dropStickySelection();
+				else this.leaveTableContext();
+			},
+			{ capture: true }
+		);
 		this.registerDomEvent(document, "focusin", (evt) => {
 			if (evt.target instanceof Element && evt.target.closest(".cm-table-widget, td, th")) this.updatePanels();
 		});
+		this.registerPenHandlers();
 		this.registerDomEvent(document, "keyup", (evt) => {
-			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(evt.key)) this.updatePanels();
+			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(evt.key)) {
+				// moving the cursor by keyboard is also a new selection, and it
+				// can walk clean out of the table
+				this.dropStickySelection();
+				if (!this.cursorInTable()) this.leaveTableContext();
+				this.updatePanels();
+			}
 		});
 		// drag-selections finish on pointerup; refresh the panels and stats chip then
 		this.registerDomEvent(document, "pointerup", () => this.updatePanels());
-		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.updatePanels()));
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", () => {
+				this.dropStickySelection();
+				this.updatePanels();
+			})
+		);
 		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu, editor) => {
 				const cur = editor.getCursor("head");
@@ -706,10 +773,9 @@ export default class PowerTablesPlugin extends Plugin {
 
 		// Live sums: recalculate marked cells shortly after any change to a note.
 		this.registerEvent(
-			this.app.workspace.on("editor-change", (editor, info) => {
+			this.app.workspace.on("editor-change", (_editor, info) => {
 				if (info?.file) {
 					this.scheduleRecalc(info.file.path);
-					this.maybeAutoReveal(editor);
 					this.updatePanels();
 				}
 			})
@@ -727,6 +793,8 @@ export default class PowerTablesPlugin extends Plugin {
 		this.register(() => {
 			for (const t of this.recalcTimers.values()) window.clearTimeout(t);
 			this.recalcTimers.clear();
+			for (const bar of this.tableBars.values()) bar.destroy();
+			this.tableBars.clear();
 		});
 
 		this.applyAppearance();
@@ -981,6 +1049,44 @@ export default class PowerTablesPlugin extends Plugin {
 		return { path, line, col: cell.cellIndex, expect: cell.textContent ?? "" };
 	}
 
+	/** The DOM table the Live Preview editor's cursor is currently inside, when
+	 *  Obsidian's table editor exposes one. Feature-detected like the rest. */
+	targetTableEl(): HTMLElement | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view) return null;
+		const em = (view as unknown as { editMode?: unknown }).editMode ?? (view.editor as unknown);
+		const tc = (em as { tableCell?: { table?: { tableEl?: HTMLElement | null } } } | null)?.tableCell;
+		return tc?.table?.tableEl ?? null;
+	}
+
+	/**
+	 * "B3" for a rendered table cell, from the DOM alone, using the numbering
+	 * the gutter draws: the header row is 1 and body rows carry on.
+	 *
+	 * References are table-local, so a click in some other table would insert
+	 * one that quietly resolves against the formula's own table instead. The
+	 * caller passes the table it snapshotted when the formula was loaded; if it
+	 * cannot be matched, this returns null and the click just behaves normally.
+	 */
+	refFromDomCell(cell: HTMLTableCellElement, target: CellTarget, snapshot: HTMLElement | null): string | null {
+		const table = cell.closest("table") as HTMLTableElement | null;
+		if (!table) return null;
+		if (snapshot) {
+			if (table !== snapshot) return null;
+		} else {
+			// Reading view: the post-processor stamped where this table lives
+			const startAttr = table.getAttribute("data-ptb-start");
+			if (startAttr == null || table.getAttribute("data-ptb-path") !== target.path) return null;
+			const start = parseInt(startAttr, 10);
+			if (target.line < start || target.line > start + table.rows.length) return null;
+		}
+		const tr = cell.closest("tr") as HTMLTableRowElement | null;
+		if (!tr) return null;
+		const idx = this.realRowIndex(tr);
+		if (idx == null) return null;
+		return `${colLetter(cell.cellIndex)}${idx + 1}`;
+	}
+
 	private onDocClick(evt: MouseEvent) {
 		if (!(evt.target instanceof Element)) return;
 		if (evt.target.closest(".ptb-toolbar") || evt.target.closest(".ptb-panel")) return;
@@ -1083,6 +1189,12 @@ export default class PowerTablesPlugin extends Plugin {
 		);
 		menu.addItem((i) => i.setTitle("Duplicate row").setIcon("copy").onClick(() => void this.duplicateRow()));
 		menu.addItem((i) =>
+			i.setTitle("Fill down").setIcon("arrow-down-to-line").onClick(() => void this.fill("down"))
+		);
+		menu.addItem((i) =>
+			i.setTitle("Fill right").setIcon("arrow-right-to-line").onClick(() => void this.fill("right"))
+		);
+		menu.addItem((i) =>
 			i.setTitle("Edit value / formula…").setIcon("function-square").onClick(() => this.openFormulaModal())
 		);
 		menu.addItem((i) => i.setTitle("Clear cell contents").setIcon("eraser").onClick(() => void this.clearContents(null)));
@@ -1147,6 +1259,46 @@ export default class PowerTablesPlugin extends Plugin {
 		return null;
 	}
 
+	/**
+	 * What the ref chip and formula bar should describe when several cells are
+	 * selected: the block, and its first cell as the thing an edit lands on.
+	 * Without this the display falls back to wherever the cursor drifted after
+	 * the last edit, which is both confusing to read and dangerous to type into.
+	 */
+	selectionDisplay(): { target: CellTarget; ref: string; summary: string } | null {
+		const sel = this.widgetSelection();
+		if (!sel) return null;
+		const lines = sel.editor.getValue().split("\n");
+		const r1 = Math.min(...sel.targets.map((t) => t.line));
+		const r2 = Math.max(...sel.targets.map((t) => t.line));
+		const c1 = Math.min(...sel.targets.map((t) => t.col));
+		const c2 = Math.max(...sel.targets.map((t) => t.col));
+		const target: CellTarget = { path: sel.path, line: r1, col: c1, expect: null, editor: sel.editor, fromCursor: false };
+		const rowNo = (line: number) => {
+			let start = line;
+			while (start > 0 && parseRow(lines[start - 1])) start--;
+			let delim = -1;
+			for (let i = start; i < lines.length; i++) {
+				const rr = parseRow(lines[i]);
+				if (!rr) break;
+				if (rr.isDelim) {
+					delim = i;
+					break;
+				}
+			}
+			return delim < 0 ? 1 : line < delim ? 1 : line - delim + 1;
+		};
+		const a = `${colLetter(c1)}${rowNo(r1)}`;
+		const b = `${colLetter(c2)}${rowNo(r2)}`;
+		const rows = r2 - r1 + 1;
+		const cols = c2 - c1 + 1;
+		return {
+			target,
+			ref: a === b ? a : `${a}:${b}`,
+			summary: `${sel.targets.length} cells selected (${rows} × ${cols})`,
+		};
+	}
+
 	/** Cell reference ("B3") and summary for the panel header; null when nothing is targeted. */
 	currentRef(target?: CellTarget | null): { ref: string; summary: string } | null {
 		const t = target ?? this.resolveTarget(true);
@@ -1168,7 +1320,9 @@ export default class PowerTablesPlugin extends Plugin {
 						break;
 					}
 				}
-				rowLabel = delim >= 0 && t.line < delim ? "H" : delim >= 0 ? String(t.line - delim) : "?";
+				// the header is row 1 and the first data row is 2, so the chip
+				// reads the same number the gutter draws beside the row
+				rowLabel = delim < 0 ? "?" : t.line < delim ? "1" : String(t.line - delim + 1);
 			}
 		}
 		return { ref: `${letter}${rowLabel}`, summary: `Column ${letter} · Row ${rowLabel} (1 × 1 cell)` };
@@ -1213,8 +1367,64 @@ export default class PowerTablesPlugin extends Plugin {
 		return this.widgetCellLine(em, tc.table, cell.row, cell.col, view);
 	}
 
-	/** The table editor's multi-cell selection (2+ cells), as doc targets. */
-	private widgetSelection(): { path: string; editor: Editor; targets: { line: number; col: number; expect: null }[] } | null {
+	/**
+	 * The table editor's multi-cell selection (2+ cells), as doc targets.
+	 *
+	 * Sticky on purpose. Applying a format rewrites the table's lines, Obsidian
+	 * re-renders the widget, and the widget drops selectedCells on the way
+	 * through, so the very next toolbar press would find nothing selected and
+	 * quietly act on one cell instead. Selecting a column and clicking 123 then
+	 * $ then Auto has to keep meaning the column. The remembered selection is
+	 * cleared by the gestures that genuinely start a new one, never by our own
+	 * edits, which is the distinction the live read cannot make.
+	 */
+	widgetSelection(): { path: string; editor: Editor; targets: { line: number; col: number; expect: null }[] } | null {
+		const live = this.readWidgetSelection();
+		if (live) {
+			this.stickySel = live;
+			return live;
+		}
+		const s = this.stickySel;
+		if (!s) return null;
+		// the remembered cells have to still be cells: validate before trusting
+		// coordinates that were taken before the last edit
+		const ed = this.editorForPath(s.path);
+		const stillCells =
+			!!ed &&
+			s.targets.every((t) => {
+				const r = parseRow(ed.getLine(t.line) ?? "");
+				return !!r && !r.isDelim && t.col < r.cellCount;
+			});
+		if (!ed || !stillCells) {
+			this.stickySel = null;
+			return null;
+		}
+		return { ...s, editor: ed };
+	}
+
+	/** Forget the remembered selection: a new gesture is starting one. */
+	private dropStickySelection() {
+		this.stickySel = null;
+	}
+
+	/** Work has moved out of the table. Both remembered signals go, so nothing
+	 *  downstream can answer "still in a table" from a cell you have left. */
+	private leaveTableContext() {
+		this.stickySel = null;
+		this.clickTarget = null;
+	}
+
+	/** Whether the live cursor is on a table row, ignoring anything remembered.
+	 *  In Reading view there is no cursor, so this cannot answer and says so. */
+	private cursorInTable(): boolean {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view || !view.file || view.getMode() === "preview") return true;
+		if (this.widgetCellAt(view)) return true;
+		const cur = view.editor.getCursor("head");
+		return !!parseRow(view.editor.getLine(cur.line) ?? "");
+	}
+
+	private readWidgetSelection(): { path: string; editor: Editor; targets: { line: number; col: number; expect: null }[] } | null {
 		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const recent = this.app.workspace.getMostRecentLeaf();
 		const view = active ?? (recent?.view instanceof MarkdownView ? recent.view : null);
@@ -1324,11 +1534,81 @@ export default class PowerTablesPlugin extends Plugin {
 
 	/** Command-palette / mobile-toolbar version of tapping a swatch: apply the
 	 *  mode's most recent color at the panel's Apply-to scope. */
-	applyLastColor(mode: "fill" | "text" | "hl") {
+	applyLastColor(mode: "fill" | "text" | "hl", evt: MouseEvent | null = null) {
 		const s = this.settings;
 		const patch: Patch =
 			mode === "fill" ? { bg: s.lastFill } : mode === "text" ? { fg: s.lastText } : { bg: s.lastHl, hl: true };
-		this.applyFromUI(patch, null);
+		this.applyFromUI(patch, evt);
+	}
+
+	/** Undo/redo the note, for the bar that stands in for the editor's toolbar
+	 *  while you are in a table. */
+	editorUndo(redo: boolean) {
+		const ed = this.resolveTarget(true)?.editor ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
+		const e = ed as unknown as { undo?: () => void; redo?: () => void } | undefined;
+		if (redo) e?.redo?.();
+		else e?.undo?.();
+	}
+
+	/**
+	 * Format painter. The first press copies the targeted cell's look, the next
+	 * cell you click wears it. Colors, highlight, borders, and number format
+	 * travel; the value never does, which is the whole point of a painter.
+	 */
+	togglePainter() {
+		if (this.painter) {
+			this.painter = null;
+			this.painterFrom = null;
+			new Notice("Format painter off.");
+			this.updatePanels();
+			return;
+		}
+		const t = this.resolveTarget();
+		if (!t) return;
+		const raw = this.cellAttrsAt(t);
+		if (!raw || (raw.bg == null && raw.fg == null)) {
+			new Notice("Power Tables: that cell has no colors to copy.");
+			return;
+		}
+		this.painter = raw;
+		this.painterFrom = { line: t.line, col: t.col };
+		new Notice("Format painter on. Click another cell to paint it.");
+		this.updatePanels();
+	}
+
+	/** The look of a cell, as a patch that can be applied to another. */
+	private cellAttrsAt(t: CellTarget): Patch | null {
+		const ed = t.editor ?? this.editorForPath(t.path);
+		if (!ed) return null;
+		const lines = ed.getValue().split("\n");
+		const located = locateLine(lines, t);
+		if (located == null) return null;
+		const r = parseRow(lines[located]);
+		if (!r || r.isDelim) return null;
+		const p = parseCellContent(r.pieces[Math.min(t.col, r.cellCount - 1) + 1]);
+		// a Patch carries colors, so that is what the painter honestly copies:
+		// borders and number formats have their own tools and their own scopes
+		return { bg: p.bg, fg: p.fg, hl: p.hl };
+	}
+
+	/** Wrap the targeted cell's text in a link, or unwrap it if it is one. */
+	async linkCell() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		const raw = this.currentCellRaw(t) ?? "";
+		const existing = /^\[([^\]]*)\]\(([^)]*)\)$/.exec(raw.trim());
+		if (existing) {
+			await this.commitCellValue(existing[1], t);
+			new Notice("Link removed; the text stays.");
+			return;
+		}
+		if (!raw.trim()) {
+			new Notice("Power Tables: put some text in the cell first, then link it.");
+			return;
+		}
+		new LinkCellModal(this.app, raw.trim(), async (url) => {
+			await this.commitCellValue(`[${raw.trim()}](${url})`, t);
+		}).open();
 	}
 
 	async styleText(style: TextStyle, evt: MouseEvent | null) {
@@ -1477,9 +1757,11 @@ export default class PowerTablesPlugin extends Plugin {
 		return null;
 	}
 
-	async alignColumn(align: ColAlign) {
-		// a multi-cell selection aligns every column it spans
-		const sel = this.widgetSelection();
+	async alignColumn(align: ColAlign, snapshot?: ReturnType<PowerTablesPlugin["widgetSelection"]>) {
+		// a multi-cell selection aligns every column it spans. The selection bar
+		// passes the one it snapshotted, because pressing its button is exactly
+		// what makes the live selection go away.
+		const sel = snapshot ?? this.widgetSelection();
 		if (sel) {
 			const cols = [...new Set(sel.targets.map((t) => t.col))];
 			if (this.alignViaWidget(sel.path, cols, align)) return;
@@ -1604,9 +1886,171 @@ export default class PowerTablesPlugin extends Plugin {
 		await this.cellAction(null, (lines, t, scope) => planBorders(lines, t, action, scope));
 	}
 
-	showBordersMenu(evt: MouseEvent) {
+	/* ---------------- Draw Borders ---------------- */
+
+	/**
+	 * A clicked table cell in document coordinates, in either view. Reading view
+	 * has the post-processor's stamp to go on; Live Preview has none, so the
+	 * table's own position in the document is asked of CodeMirror and the row
+	 * and column come from the DOM.
+	 */
+	private docCellFromDom(cell: HTMLTableCellElement): { path: string; line: number; col: number } | null {
+		const tr = cell.closest("tr") as HTMLTableRowElement | null;
+		const table = cell.closest("table");
+		if (!tr || !table) return null;
+		const idx = this.realRowIndex(tr);
+		if (idx == null) return null;
+		const stamped = table.getAttribute("data-ptb-start");
+		const path = table.getAttribute("data-ptb-path");
+		// header is the table's first line; body rows clear the |---| divider
+		const lineFor = (start: number) => start + (idx === 0 ? 0 : idx + 1);
+		if (stamped != null && path) return { path, line: lineFor(parseInt(stamped, 10)), col: cell.cellIndex };
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.file) return null;
+		const cm = (view.editor as unknown as { cm?: EditorView }).cm;
+		if (!cm) return null;
+		try {
+			const start = cm.state.doc.lineAt(cm.posAtDOM(table)).number - 1;
+			return { path: view.file.path, line: lineFor(start), col: cell.cellIndex };
+		} catch {
+			return null;
+		}
+	}
+
+	/** Which edge of a cell the pointer is nearest, for the pen that draws one
+	 *  edge at a time. Whichever side it is closest to wins. */
+	private nearestEdge(cell: HTMLElement, x: number, y: number): "top" | "bottom" | "left" | "right" {
+		const r = cell.getBoundingClientRect();
+		const d = { top: y - r.top, bottom: r.bottom - y, left: x - r.left, right: r.right - x };
+		return (Object.keys(d) as (keyof typeof d)[]).reduce((a, b) => (d[b] < d[a] ? b : a));
+	}
+
+	/** Arm or disarm a drawing tool. Toggling the armed one off is how you stop,
+	 *  as is Escape. */
+	setPen(tool: "border" | "grid" | "erase" | null) {
+		this.pen = this.pen?.tool === tool ? null : tool ? { tool } : null;
+		document.body.toggleClass("ptb-drawing", !!this.pen);
+		document.body.toggleClass("ptb-drawing-erase", this.pen?.tool === "erase");
+		new Notice(
+			this.pen
+				? `${this.pen.tool === "erase" ? "Erase" : this.pen.tool === "grid" ? "Draw grid" : "Draw border"}: drag over cells. Esc or the same button to stop.`
+				: "Border pen off."
+		);
+	}
+
+	/** Collect a stroke while the pen is armed and commit it in one edit. */
+	private registerPenHandlers() {
+		let stroke: { line: number; col: number; edge?: Edge }[] = [];
+		let path: string | null = null;
+		let drawing = false;
+		const at = (e: PointerEvent) => {
+			if (!(e.target instanceof Element)) return null;
+			const cell = e.target.closest("td, th") as HTMLTableCellElement | null;
+			if (!cell || !cell.closest("table")) return null;
+			const doc = this.docCellFromDom(cell);
+			if (!doc) return null;
+			const edge = this.pen?.tool === "border" ? this.nearestEdge(cell, e.clientX, e.clientY) : undefined;
+			return { doc, edge };
+		};
+		const add = (e: PointerEvent) => {
+			const hit = at(e);
+			if (!hit) return;
+			if (path && hit.doc.path !== path) return;
+			path = hit.doc.path;
+			const key = `${hit.doc.line}:${hit.doc.col}:${hit.edge ?? ""}`;
+			if (stroke.some((s) => `${s.line}:${s.col}:${s.edge ?? ""}` === key)) return;
+			stroke.push({ line: hit.doc.line, col: hit.doc.col, edge: hit.edge });
+		};
+		this.registerDomEvent(
+			document,
+			"pointerdown",
+			(e) => {
+				if (!this.pen || !at(e)) return;
+				// keep the press off the cell editor: this is a pen stroke, not
+				// a click into the text
+				e.preventDefault();
+				e.stopPropagation();
+				drawing = true;
+				stroke = [];
+				path = null;
+				add(e);
+			},
+			{ capture: true }
+		);
+		this.registerDomEvent(document, "pointermove", (e) => {
+			if (drawing && this.pen) add(e);
+		});
+		this.registerDomEvent(document, "pointerup", () => {
+			if (!drawing) return;
+			drawing = false;
+			const pen = this.pen;
+			const cells = stroke;
+			const p = path;
+			stroke = [];
+			if (!pen || !p || !cells.length) return;
+			const spec = {
+				tool: pen.tool,
+				weight: this.settings.penStyle as EdgeWeight,
+				color: this.settings.penColor === "default" ? null : (this.settings.penColor as BorderColor),
+			};
+			void this.runPlan({ path: p, editor: this.editorForPath(p), fromCursor: false }, (lines) =>
+				planDrawBorders(lines, cells, spec)
+			);
+		});
+		this.registerDomEvent(document, "keydown", (e) => {
+			if (e.key === "Escape" && this.pen) this.setPen(null);
+		});
+	}
+
+	/** The pen's colour, as its own menu: this Obsidian has no submenu API. */
+	showLineColorMenu(evt: MouseEvent, at?: { x: number; y: number }) {
+		const pos = at ?? this.menuAnchor(evt);
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Line color").setIsLabel(true));
+		const pick = (value: string, label: string) =>
+			menu.addItem((i) =>
+				i
+					.setTitle(label)
+					.setChecked(this.settings.penColor === value)
+					.onClick(async () => {
+						this.settings.penColor = value;
+						await this.saveSettings();
+					})
+			);
+		pick("default", "Default");
+		for (const c of BORDER_COLORS) pick(c, c[0].toUpperCase() + c.slice(1));
+		menu.showAtPosition(pos);
+	}
+
+	showLineStyleMenu(evt: MouseEvent, at?: { x: number; y: number }) {
+		const pos = at ?? this.menuAnchor(evt);
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Line style").setIsLabel(true));
+		const styles: [EdgeWeight, string][] = [
+			["thin", "Thin"],
+			["thick", "Thick"],
+			["double", "Double"],
+			["dashed", "Dashed"],
+			["dotted", "Dotted"],
+		];
+		for (const [w, label] of styles) {
+			menu.addItem((i) =>
+				i
+					.setTitle(label)
+					.setChecked(this.settings.penStyle === w)
+					.onClick(async () => {
+						this.settings.penStyle = w;
+						await this.saveSettings();
+					})
+			);
+		}
+		menu.showAtPosition(pos);
+	}
+
+	showBordersMenu(evt: MouseEvent, at?: { x: number; y: number }) {
 		const menu = new Menu();
 		const scope = this.uiScope;
+		menu.addItem((i) => i.setTitle("Borders").setIsLabel(true));
 		const items: [BorderAction, string, string][] = [
 			["bottom", "Bottom border", "panel-bottom"],
 			["top", "Top border", "panel-top"],
@@ -1625,7 +2069,51 @@ export default class PowerTablesPlugin extends Plugin {
 		menu.addItem((i) =>
 			i.setTitle(`Thick outside borders (${scope})`).setIcon("frame").onClick(() => void this.applyBorders("thickoutside"))
 		);
-		menu.showAtMouseEvent(evt);
+		menu.addSeparator();
+		menu.addItem((i) => i.setTitle("Stacked").setIsLabel(true));
+		// glyphs chosen from ones this plugin already renders, rather than the
+		// exact Lucide name for each shape: a missing icon shows as nothing, and
+		// the labels carry the meaning anyway
+		const stacked: [BorderAction, string, string][] = [
+			["thickbottom", "Thick bottom border", "panel-bottom"],
+			["doublebottom", "Double bottom border", "equal"],
+			["topbottom", "Top and bottom border", "align-justify"],
+			["topthickbottom", "Top and thick bottom border", "align-justify"],
+			["topdoublebottom", "Top and double bottom border", "equal"],
+		];
+		for (const [action, title, icon] of stacked) {
+			menu.addItem((i) => i.setTitle(title).setIcon(icon).onClick(() => void this.applyBorders(action)));
+		}
+		menu.addSeparator();
+		menu.addItem((i) => i.setTitle("Draw borders").setIsLabel(true));
+		const anchor = this.menuAnchor(evt);
+		const pens: [("border" | "grid" | "erase"), string, string][] = [
+			["border", "Draw border", "pencil"],
+			["grid", "Draw border grid", "layout-grid"],
+			["erase", "Erase border", "eraser"],
+		];
+		for (const [tool, title, icon] of pens) {
+			menu.addItem((i) =>
+				i
+					.setTitle(title)
+					.setIcon(icon)
+					.setChecked(this.pen?.tool === tool)
+					.onClick(() => this.setPen(tool))
+			);
+		}
+		menu.addItem((i) =>
+			i
+				.setTitle(`Line color: ${this.settings.penColor}`)
+				.setIcon("palette")
+				.onClick(() => this.showLineColorMenu(evt, anchor))
+		);
+		menu.addItem((i) =>
+			i
+				.setTitle(`Line style: ${this.settings.penStyle}`)
+				.setIcon("minus")
+				.onClick(() => this.showLineStyleMenu(evt, anchor))
+		);
+		menu.showAtPosition(at ?? anchor);
 	}
 
 	async insertRow(where: "above" | "below") {
@@ -1701,10 +2189,12 @@ export default class PowerTablesPlugin extends Plugin {
 					break;
 				}
 			}
-			const bodyRow = delim >= 0 && located > delim ? located - delim : 1;
-			return calcToFormula(parsed.calc, col, bodyRow);
+			const row = delim >= 0 && located > delim ? located - delim + 1 : 1;
+			return calcToFormula(parsed.calc, col, row);
 		}
-		return parsed.inner;
+		// the value, not how it is stored: a bolded, highlighted, colored cell
+		// is still just 500 as far as the formula bar is concerned
+		return cellTextParts(parsed.inner).text;
 	}
 
 	async commitCellValue(raw: string, target?: CellTarget | null) {
@@ -1865,6 +2355,36 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 	}
 
+	/** Excel's Fill Down / Fill Right. A drag selection fills from its leading
+	 *  edge into the rest; a single targeted cell fills from its neighbour. */
+	async fill(dir: "down" | "right") {
+		const sel = this.widgetSelection();
+		const where = sel
+			? { target: { path: sel.path, editor: sel.editor, fromCursor: false }, targets: sel.targets }
+			: null;
+		let plan;
+		if (where) {
+			plan = await this.runPlan(where.target, (lines) => planFill(lines, where.targets, dir));
+		} else {
+			const t = this.resolveTarget();
+			if (!t) return;
+			plan = await this.runPlan(t, (lines) => planFill(lines, [{ line: t.line, col: t.col }], dir));
+		}
+		if (!plan) {
+			new Notice(
+				dir === "down"
+					? "Power Tables: select the cells to fill, or put the cursor in a cell with a row above it to copy."
+					: "Power Tables: select the cells to fill, or put the cursor in a cell with a column to its left to copy."
+			);
+			return;
+		}
+		if (!plan.filled) {
+			new Notice("Power Tables: nothing to fill, those cells already match.");
+			return;
+		}
+		new Notice(`Filled ${plan.filled} cell${plan.filled === 1 ? "" : "s"} ${dir}.`);
+	}
+
 	async calcInto(spec: CalcSpec) {
 		// Excel-style AutoSum: with a drag selection, the function runs over the
 		// selected range and lands in its empty cell (or the one just below).
@@ -1925,7 +2445,205 @@ export default class PowerTablesPlugin extends Plugin {
 		await this.runPlan(t, (lines) => planMoveColumn(lines, t, delta));
 	}
 
-	showCalcMenu(evt: MouseEvent) {
+	/**
+	 * Excel's AutoSum split button: the five functions people actually reach
+	 * for, then a way out to the rest. Each one routes through calcInto, so a
+	 * drag selection gets an AutoSum written into its empty cell and a lone
+	 * cell gets a live column calc, exactly as those buttons already behaved.
+	 */
+	/**
+	 * Where a toolbar menu should open: pinned under its own button, not at the
+	 * pointer, so it lines up the same however you happened to click. The rect
+	 * is read synchronously because a menu callback runs after the event has
+	 * finished dispatching, by which point currentTarget is null.
+	 */
+	private menuAnchor(evt: MouseEvent): { x: number; y: number } {
+		const el = evt.currentTarget instanceof HTMLElement ? evt.currentTarget : null;
+		if (!el) return { x: evt.clientX, y: evt.clientY };
+		const r = el.getBoundingClientRect();
+		return { x: r.left, y: r.bottom + 4 };
+	}
+
+	/** Apply-to as a menu, for the bar where three buttons is two too many.
+	 *  The button's own label carries the current scope, so it stays readable
+	 *  without opening anything: this setting governs nearly every other button
+	 *  on the bar, and a scope you cannot see is a scope that surprises you. */
+	showScopeMenu(evt: MouseEvent) {
+		const defs: [Scope, string][] = [
+			["cell", "Cell"],
+			["row", "Row"],
+			["column", "Column"],
+		];
+		const menu = new Menu();
+		for (const [scope, label] of defs) {
+			menu.addItem((i) =>
+				i
+					.setTitle(label)
+					.setChecked(this.uiScope === scope)
+					.onClick(() => {
+						this.uiScope = scope;
+						this.updatePanels();
+					})
+			);
+		}
+		menu.showAtPosition(this.menuAnchor(evt));
+	}
+
+	/** Structure: the things that change the table's shape. */
+	showTableMenu(evt: MouseEvent) {
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Table").setIsLabel(true));
+		const items: [string, string, () => void][] = [
+			["Insert row below", "plus", () => void this.insertRow("below")],
+			["Insert column right", "plus", () => void this.insertColumn("right")],
+			["Totals row", "sigma", () => void this.insertTotalsRow()],
+			["Sort A→Z", "arrow-down-a-z", () => void this.sortTable("asc")],
+			["Sort Z→A", "arrow-up-a-z", () => void this.sortTable("desc")],
+			["Prettify", "align-justify", () => void this.prettifyTable()],
+			["Auto-fit columns", "chevrons-right-left", () => void this.autoFitColumnWidths()],
+		];
+		for (const [label, icon, run] of items) {
+			menu.addItem((i) => i.setTitle(label).setIcon(icon).onClick(run));
+		}
+		menu.showAtPosition(this.menuAnchor(evt));
+	}
+
+	/** Getting values in and out, and taking them back off again. */
+	showDataMenu(evt: MouseEvent) {
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Data").setIsLabel(true));
+		const items: [string, string, (e: MouseEvent) => void][] = [
+			["Fill down", "arrow-down-to-line", () => void this.fill("down")],
+			["Fill right", "arrow-right-to-line", () => void this.fill("right")],
+			["Import…", "clipboard-paste", () => this.openImportModal()],
+			["Paste rows", "clipboard", () => void this.pasteFromClipboard()],
+			["Copy as CSV", "copy", () => void this.copyTableCsv()],
+			["Color rules…", "wand-2", () => this.openRulesModal()],
+		];
+		for (const [label, icon, run] of items) {
+			menu.addItem((i) => i.setTitle(label).setIcon(icon).onClick((e) => run(e as MouseEvent)));
+		}
+		menu.addSeparator();
+		menu.addItem((i) =>
+			i.setTitle("Clear colors (table)").setIcon("eraser").onClick(() => void this.applyColor({ bg: null, fg: null }, "table"))
+		);
+		menu.addItem((i) =>
+			i.setTitle("Clear values").setIcon("eraser").onClick((e) => void this.clearContents(e as MouseEvent))
+		);
+		menu.showAtPosition(this.menuAnchor(evt));
+	}
+
+	/**
+	 * Per-table appearance. Checkable items, so the menu reads its own state;
+	 * a flag set on this table specifically says so, since that is the bit you
+	 * cannot infer from the checkmark alone.
+	 */
+	async showViewMenu(evt: MouseEvent) {
+		const at = this.menuAnchor(evt);
+		const t = this.resolveTarget(true);
+		const flags = await this.tableFlags(t);
+		const s = this.settings;
+		const globals: Record<TableFlag, boolean> = {
+			guides: s.cellRefs,
+			striped: s.stripedRows,
+			compact: s.compactTables,
+			headerfill: s.fillHeaders,
+			sticky: s.stickyHeaders,
+			filters: s.filterRow,
+		};
+		const defs: [TableFlag, string][] = [
+			["guides", "Reference guides"],
+			["striped", "Striped rows"],
+			["compact", "Compact rows"],
+			["headerfill", "Header fill"],
+			["sticky", "Sticky header"],
+			["filters", "Filter row"],
+		];
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("This table").setIsLabel(true));
+		for (const [f, label] of defs) {
+			const set = flags[f] !== undefined;
+			menu.addItem((i) =>
+				i
+					.setTitle(set ? `${label} (set on this table)` : label)
+					.setChecked(flags[f] ?? globals[f])
+					.onClick(() => void this.toggleTableFlag(f))
+			);
+		}
+		menu.showAtPosition(at);
+	}
+
+	showAutoSumMenu(evt: MouseEvent, at?: { x: number; y: number }) {
+		const anchor = this.menuAnchor(evt);
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("AutoSum").setIsLabel(true));
+		const items: [CalcFn, string, string][] = [
+			["sum", "Sum", "sigma"],
+			["avg", "Average", "divide"],
+			["count", "Count numbers", "hash"],
+			["max", "Max", "arrow-up"],
+			["min", "Min", "arrow-down"],
+		];
+		for (const [fn, label, icon] of items) {
+			menu.addItem((i) => i.setTitle(label).setIcon(icon).onClick(() => void this.calcInto({ fn, dir: "column" })));
+		}
+		menu.addSeparator();
+		menu.addItem((i) =>
+			i.setTitle("Across the row…").setIcon("move-horizontal").onClick(() => this.showCalcMenu(evt, anchor))
+		);
+		menu.addItem((i) =>
+			i.setTitle("More functions…").setIcon("function-square").onClick(() => this.openFormulaModal())
+		);
+		menu.showAtPosition(at ?? this.menuAnchor(evt));
+	}
+
+	/**
+	 * Excel's number-format dropdown, consolidating what were five buttons.
+	 * Every entry previews against the targeted cell's own value, so you pick
+	 * by what it will look like rather than by the name of a format. Only what
+	 * this plugin can actually render is listed: no Fraction or Scientific
+	 * entries that would sit there doing nothing.
+	 */
+	showNumberFormatMenu(evt: MouseEvent, at?: { x: number; y: number }) {
+		const raw = this.currentCellRaw() ?? "";
+		const n = parseNumeric(raw);
+		const sample = n ? n.value : 45;
+		const presets: [string, string, FmtSpec | null][] = [
+			["General", "circle-slash", null],
+			["Number", "hash", { ...FMT_DEFAULTS, kind: "number" }],
+			["Currency", "dollar-sign", { ...FMT_DEFAULTS, kind: "currency" }],
+			["Accounting", "landmark", { ...FMT_DEFAULTS, kind: "currency", negative: "paren" }],
+			["Short date", "calendar", { ...FMT_DEFAULTS, kind: "date", datePattern: "mdy" }],
+			["Long date", "calendar-days", { ...FMT_DEFAULTS, kind: "date", datePattern: "weekday" }],
+			["Time", "clock", { ...FMT_DEFAULTS, kind: "time", timePattern: "h12s" }],
+			["Percentage", "percent", { ...FMT_DEFAULTS, kind: "percent" }],
+		];
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Number format").setIsLabel(true));
+		for (const [label, icon, spec] of presets) {
+			// dates and times preview off the cell's own text, numbers off its value
+			let preview = "";
+			if (!spec) preview = raw.trim().slice(0, 24);
+			else if (spec.kind === "date" || spec.kind === "time") preview = formatPiece(` ${raw.trim()} `, spec)?.trim() ?? "";
+			else preview = formatBySpec(sample, spec);
+			menu.addItem((i) =>
+				i
+					.setTitle(preview ? `${label}    ${preview}` : label)
+					.setIcon(icon)
+					.onClick(() => {
+					if (spec) void this.applyFormat(spec, false);
+					else void this.formatNumber("auto", null);
+				})
+			);
+		}
+		menu.addSeparator();
+		menu.addItem((i) =>
+			i.setTitle("More number formats…").setIcon("settings-2").onClick(() => this.openFormatModal())
+		);
+		menu.showAtPosition(at ?? this.menuAnchor(evt));
+	}
+
+	showCalcMenu(evt: MouseEvent, at?: { x: number; y: number }) {
 		const menu = new Menu();
 		const fns: [CalcFn, string][] = [
 			["sum", "Sum"],
@@ -1943,10 +2661,10 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Freeze value (remove live calc)").onClick(() => void this.freezeCalc()));
-		menu.showAtMouseEvent(evt);
+		menu.showAtPosition(at ?? this.menuAnchor(evt));
 	}
 
-	showSortMenu(evt: MouseEvent) {
+	showSortMenu(evt: MouseEvent, at?: { x: number; y: number }) {
 		const menu = new Menu();
 		menu.addItem((i) => i.setTitle("Sort ascending (small → large, A → Z)").onClick(() => void this.sortTable("asc")));
 		menu.addItem((i) => i.setTitle("Sort descending (large → small, Z → A)").onClick(() => void this.sortTable("desc")));
@@ -1955,7 +2673,7 @@ export default class PowerTablesPlugin extends Plugin {
 		menu.addItem((i) => i.setTitle("Move row down").onClick(() => void this.moveRow(1)));
 		menu.addItem((i) => i.setTitle("Move column left").onClick(() => void this.moveColumn(-1)));
 		menu.addItem((i) => i.setTitle("Move column right").onClick(() => void this.moveColumn(1)));
-		menu.showAtMouseEvent(evt);
+		menu.showAtPosition(at ?? this.menuAnchor(evt));
 	}
 
 	private scheduleRecalc(path: string, delay = 600) {
@@ -2080,6 +2798,9 @@ export default class PowerTablesPlugin extends Plugin {
 				this.cantLocate();
 				return null;
 			}
+			// a structural edit moves every line after it, so remembered cell
+			// coordinates stop meaning what they meant
+			if (plan.edits.some((e) => e.kind === "insert" || e.kind === "delete")) this.dropStickySelection();
 			if (plan.edits.length) {
 				this.holdScroll(editor, () => {
 					editor.transaction({
@@ -2206,44 +2927,135 @@ export default class PowerTablesPlugin extends Plugin {
 		this.panels.delete(p);
 	}
 
+	/** True when the docked bar is the home for per-cell formatting. On a phone
+	 *  two extra rows cost more than they give, so the panel keeps everything. */
+	barEnabled(): boolean {
+		return this.settings.tableBar && !Platform.isMobile;
+	}
+
+	/**
+	 * The layout a freshly built sidebar or floating panel should use.
+	 *
+	 * Always the complete one. The docked bar is the default surface and the
+	 * panel no longer opens itself, so anyone who goes and opens it deliberately
+	 * wants the tools, not a stub explaining that they moved.
+	 */
+	panelLayout(): "full" {
+		return "full";
+	}
+
+	/** Dock the bar in the active view while the target is inside a table, drop
+	 *  it the moment it is not, and never leave one behind in a closed view. */
+	private syncTableBar(inTable: boolean) {
+		const view = this.barEnabled() ? this.app.workspace.getActiveViewOfType(MarkdownView) : null;
+		for (const [v, bar] of [...this.tableBars]) {
+			if (v === view && v.containerEl.isConnected) continue;
+			bar.destroy();
+			this.tableBars.delete(v);
+		}
+		if (!view) return;
+		const have = this.tableBars.get(view);
+		if (inTable && !have) this.tableBars.set(view, new TableBar(this, view));
+		else if (!inTable && have) {
+			have.destroy();
+			this.tableBars.delete(view);
+		}
+	}
+
+	/** A primed painter pays out on the next cell the target moves to, then
+	 *  disarms. One press, one cell, like Excel's single-click painter. */
+	private paintIfArmed() {
+		const patch = this.painter;
+		if (!patch) return;
+		const t = this.resolveTarget(true);
+		if (!t || (t.line === this.painterFrom?.line && t.col === this.painterFrom?.col)) return;
+		this.painter = null;
+		this.painterFrom = null;
+		this.applyFromUI(patch, null);
+	}
+
 	updatePanels() {
-		for (const p of this.panels) p.refresh();
+		this.paintIfArmed();
+		this.syncTableBar(this.maybeAutoReveal());
+		// the bar registers itself as a panel while we are here, so iterate a copy
+		for (const p of [...this.panels]) p.refresh();
 		this.fmtModal?.refreshScope();
 		this.updateStatsChip();
 	}
 
 	/** Full panel re-render (not just a refresh), swatch grids re-read the palette. */
 	rebuildPanels() {
-		for (const p of this.panels) p.rebuild();
+		for (const p of [...this.panels]) p.rebuild();
+	}
+
+	/** Tear the surfaces down and let them come back in the current shape. Used
+	 *  when the bar is switched on or off, which moves whole sections between
+	 *  the bar and the panel and so cannot be handled by a refresh. */
+	refreshSurfaces() {
+		for (const [v, bar] of [...this.tableBars]) {
+			bar.destroy();
+			this.tableBars.delete(v);
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_PT)) {
+			const view = leaf.view as PowerTablesView;
+			view.rebuildUI();
+		}
+		if (this.toolbar) {
+			this.closeToolbar();
+			this.openToolbar();
+		}
+		this.updatePanels();
 	}
 
 	/** Excel-style status readout for a drag selection: Sum, Avg, Count, and a one-click insert. */
+	/**
+	 * The bar that appears while cells are selected. It carries the readout when
+	 * the selection is numeric, and the actions that belong to a selection
+	 * either way, because selecting a column and reaching for align is the
+	 * moment the sidebar is furthest from your hand.
+	 */
 	private updateStatsChip() {
 		const sel = this.widgetSelection();
-		const stats = sel ? selectionStats(sel.editor.getValue().split("\n"), sel.targets) : null;
-		if (!stats) {
+		if (!sel) {
 			this.statsSel = null;
 			this.statsEl?.detach();
 			return;
 		}
+		const stats = selectionStats(sel.editor.getValue().split("\n"), sel.targets);
 		this.statsSel = sel;
 		if (!this.statsEl) {
 			this.statsEl = createDiv({ cls: "ptb-stats" });
 			this.statsText = this.statsEl.createSpan({ cls: "ptb-stats-text" });
-			const btn = this.statsEl.createEl("button", { cls: "ptb-stats-btn", text: "Σ Insert" });
-			// Act at pointerdown with the snapshotted selection: the press makes
-			// the table widget drop its selection and this chip detach, so a
-			// click event would never be dispatched (same lesson as checkboxes).
-			btn.addEventListener("pointerdown", (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				const s = this.statsSel;
-				if (s) void this.insertSelectionCalc(s, "sum");
-			});
-			btn.addEventListener("click", (e) => e.preventDefault());
+			// Every one of these acts at pointerdown against the snapshotted
+			// selection: the press makes the table widget drop its selection and
+			// this bar detach, so a click event would never be dispatched (the
+			// same lesson the checkboxes taught).
+			const press = (el: HTMLElement, run: (s: NonNullable<typeof this.statsSel>) => void) => {
+				el.addEventListener("pointerdown", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					const s = this.statsSel;
+					if (s) run(s);
+				});
+				el.addEventListener("click", (e) => e.preventDefault());
+			};
+			const acts = this.statsEl.createDiv({ cls: "ptb-stats-acts" });
+			for (const [align, icon, tip] of [
+				["left", "align-left", "Align column left"],
+				["center", "align-center", "Align column center"],
+				["right", "align-right", "Align column right"],
+			] as [ColAlign, string, string][]) {
+				const b = acts.createEl("button", { cls: "ptb-stats-icon", attr: { "aria-label": tip, title: tip } });
+				setIcon(b, icon);
+				press(b, (s) => void this.alignColumn(align, s));
+			}
+			this.statsSum = this.statsEl.createEl("button", { cls: "ptb-stats-btn", text: "Σ Insert" });
+			press(this.statsSum, (s) => void this.insertSelectionCalc(s, "sum"));
 			this.register(() => this.statsEl?.remove());
 		}
-		this.statsText.setText(`Sum ${stats.sum}   ·   Avg ${stats.avg}   ·   Count ${stats.count}`);
+		this.statsText.setText(stats ? `Sum ${stats.sum}   ·   Avg ${stats.avg}   ·   Count ${stats.count}` : "");
+		this.statsText.toggle(!!stats);
+		this.statsSum.toggle(!!stats);
 		if (!this.statsEl.isConnected) document.body.appendChild(this.statsEl);
 	}
 
@@ -2262,16 +3074,38 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	/** First time the user edits inside a table this session, reveal the chosen panel. */
-	private maybeAutoReveal(editor: Editor) {
-		if (this.autoRevealed || !this.settings.autoOpenSidebar) return;
-		if (this.panels.size) {
-			this.autoRevealed = true;
-			return;
+	/**
+	 * Surface the panel when work moves into a table, in whichever form the
+	 * setting asks for. Runs from updatePanels, so it catches every way into a
+	 * table: typing, arrow keys, clicking a cell, finishing a drag selection.
+	 *
+	 * The latch re-arms only when the target leaves the table. That keeps a
+	 * panel you closed on purpose closed while you carry on in the same table,
+	 * without stranding you toolbar-less in the next one.
+	 */
+	private maybeAutoReveal(): boolean {
+		const t0 = this.resolveTarget(true);
+		const onRow0 = !!t0 && !!parseRow((t0.editor ?? this.editorForPath(t0.path))?.getLine(t0.line) ?? "");
+		const inTable0 = onRow0 || !!this.widgetSelection();
+		// with the bar docked over the table there is nothing to reveal: the
+		// tools are already there, and popping a sidebar open as well is the
+		// clutter this split exists to remove
+		if (!this.settings.autoOpenSidebar || this.barEnabled()) {
+			if (!inTable0) this.autoRevealed = false;
+			return inTable0;
 		}
-		const cur = editor.getCursor("head");
-		if (!parseRow(editor.getLine(cur.line))) return;
+		const inTable = inTable0;
+		if (!inTable) {
+			this.autoRevealed = false;
+			return false;
+		}
+		if (this.autoRevealed) return true;
 		this.autoRevealed = true;
-		void this.openPanel();
+		if (this.panels.size || this.toolbar) return true;
+		// honor the mode the user picked
+		if (this.settings.panelMode === "floating") this.openToolbar();
+		else void this.openPanel();
+		return true;
 	}
 
 	async loadSettings() {
@@ -2319,6 +3153,35 @@ export default class PowerTablesPlugin extends Plugin {
  * right-sidebar view (primary, per the design handoff) and inside the
  * floating panel.
  */
+/**
+ * The strip docked under the editor's own toolbar while the cursor is in a
+ * table: formatting on the first row, the formula bar on the second, the way a
+ * spreadsheet stacks them. It mounts by inserting before .view-content, which
+ * is how Obsidian toolbars dock, so if another plugin already put one there
+ * this lands underneath it rather than fighting for the same slot.
+ */
+class TableBar {
+	private el: HTMLElement;
+	private ui: PanelUI;
+
+	constructor(plugin: PowerTablesPlugin, view: MarkdownView) {
+		this.el = createDiv({ cls: "ptb-tablebar" });
+		const content = view.containerEl.querySelector(":scope > .view-content");
+		if (content) view.containerEl.insertBefore(this.el, content);
+		else view.containerEl.prepend(this.el);
+		this.ui = new PanelUI(plugin, this.el, "bar");
+	}
+
+	refresh() {
+		this.ui.refresh();
+	}
+
+	destroy() {
+		this.ui.destroy();
+		this.el.remove();
+	}
+}
+
 class PanelUI {
 	private mode: "fill" | "text" | "hl";
 	private fillBtn!: HTMLButtonElement;
@@ -2335,12 +3198,97 @@ class PanelUI {
 	 *  wherever the cursor drifted while the user was typing in the bar. */
 	private fxTarget: CellTarget | null = null;
 	private fxLoaded = "";
+	private acEl!: HTMLElement;
+	private acItems: string[] = [];
+	private acIndex = 0;
+	/** The table the formula bar was loaded from, captured while the editor
+	 *  still had the cell, so point mode can refuse clicks in other tables. */
+	private fxTableEl: HTMLElement | null = null;
+
+	private pointReady(): boolean {
+		return refInsertAllowed(this.formulaInput.value, this.formulaInput.selectionStart ?? this.formulaInput.value.length);
+	}
+
+	private markPointMode() {
+		this.formulaInput.toggleClass("is-pointing", this.pointReady());
+	}
+
+	private onPointDown = (evt: MouseEvent) => {
+		if (!(evt.target instanceof Element)) return;
+		if (evt.target.closest(".ptb-panel") || evt.target.closest(".ptb-toolbar")) return;
+		const cell = evt.target.closest("td, th") as HTMLTableCellElement | null;
+		if (!cell || !this.fxTarget || !this.pointReady()) return;
+		const ref = this.plugin.refFromDomCell(cell, this.fxTarget, this.fxTableEl);
+		if (!ref) return;
+		// keep focus in the bar: no blur means no commit, and the formula stays
+		// open for the next reference
+		evt.preventDefault();
+		evt.stopPropagation();
+		const v = this.formulaInput.value;
+		const from = this.formulaInput.selectionStart ?? v.length;
+		const to = this.formulaInput.selectionEnd ?? from;
+		this.formulaInput.value = v.slice(0, from) + ref + v.slice(to);
+		const caret = from + ref.length;
+		this.formulaInput.setSelectionRange(caret, caret);
+		this.formulaInput.focus();
+		this.markPointMode();
+	};
+
+	private acClose() {
+		this.acItems = [];
+		this.acRender();
+	}
+
+	private acUpdate() {
+		const v = this.formulaInput.value;
+		this.acItems = completionsAt(v, this.formulaInput.selectionStart ?? v.length);
+		this.acIndex = 0;
+		this.acRender();
+	}
+
+	private acRender() {
+		this.acEl.empty();
+		this.acEl.toggleClass("is-open", this.acItems.length > 0);
+		this.acItems.forEach((name, k) => {
+			const item = this.acEl.createDiv({ cls: "ptb-fx-ac-item", text: name });
+			item.toggleClass("is-active", k === this.acIndex);
+			// mousedown, not click: preventDefault here keeps focus in the input
+			// so the blur handler cannot commit out from under the pick
+			item.addEventListener("mousedown", (e) => {
+				e.preventDefault();
+				this.acAccept(k);
+			});
+		});
+	}
+
+	private acAccept(k: number) {
+		const name = this.acItems[k];
+		if (!name) return;
+		const v = this.formulaInput.value;
+		const next = applyCompletion(v, this.formulaInput.selectionStart ?? v.length, name);
+		this.formulaInput.value = next.text;
+		this.formulaInput.setSelectionRange(next.caret, next.caret);
+		this.acClose();
+		this.formulaInput.focus();
+		this.markPointMode();
+	}
 	private scopeBtns: [Scope, HTMLButtonElement][] = [];
 	private tflagBtns: [TableFlag, HTMLButtonElement][] = [];
 	private moreLabel!: HTMLElement;
 	private pickerOpen = false;
 
-	constructor(private plugin: PowerTablesPlugin, private root: HTMLElement) {
+	/**
+	 * Where this instance is rendering. "bar" is the strip docked over the
+	 * table: formatting and the formula row inline, everything else behind the
+	 * AutoSum, Format, Table, Data and View menus. "full" is the standalone
+	 * panel, which lays the same tools out as sections for the cases with no
+	 * bar to carry them: phones, and anyone who turns it off.
+	 */
+	constructor(
+		private plugin: PowerTablesPlugin,
+		private root: HTMLElement,
+		private layout: "full" | "bar" = "full"
+	) {
 		this.mode = plugin.settings.lastMode;
 		this.build();
 		plugin.registerPanel(this);
@@ -2348,8 +3296,13 @@ class PanelUI {
 
 	destroy() {
 		this.plugin.unregisterPanel(this);
+		if (this.popClose) document.removeEventListener("click", this.popClose, true);
+		this.popClose = null;
 		this.root.empty();
 	}
+
+	private popClose: ((e: MouseEvent) => void) | null = null;
+	private scopeLabel: HTMLElement | null = null;
 
 	private guard(b: HTMLElement) {
 		b.addEventListener("mousedown", (e) => e.preventDefault());
@@ -2363,8 +3316,18 @@ class PanelUI {
 	private build() {
 		const root = this.root;
 		root.empty();
-		root.addClass("ptb-panel");
+		root.removeClass("ptb-panel");
+		root.removeClass("ptb-bar");
+		root.addClass(this.layout === "bar" ? "ptb-bar" : "ptb-panel");
+		const perTable = this.layout !== "bar";
+		if (perTable) this.buildHead(root);
+		this.buildFormatting(root);
+		if (perTable) this.buildPerTable(root);
+		this.refresh();
+	}
 
+	/** Title, ref chip, settings gear: panel chrome, not toolbar chrome. */
+	private buildHead(root: HTMLElement) {
 		const head = root.createDiv({ cls: "ptb-panelhead" });
 		head.createSpan({ cls: "ptb-paneltitle", text: "Power Tables" });
 		// the chip only appears once a cell is targeted; a placeholder dash
@@ -2380,17 +3343,49 @@ class PanelUI {
 			s?.openTabById("powertables");
 		});
 		this.summaryEl = root.createDiv({ cls: "ptb-summary", text: "Click a table cell to begin" });
+	}
 
+	/** Everything that acts on the targeted cell, row, or column. Lives in the
+	 *  docked bar when there is one, in the panel when there is not. */
+	private buildFormatting(root: HTMLElement) {
 		// Excel-style formula bar: shows the targeted cell's value (or its
 		// formula); Enter or leaving the bar commits, Esc reverts
-		// "=SUM(B1:B3)" becomes a live formula cell.
+		// "=SUM(B2:B4)" becomes a live formula cell.
 		const fx = root.createDiv({ cls: "ptb-fx" });
+		// the bar has no panel header, so the ref chip rides on the formula row,
+		// which is where a spreadsheet puts it anyway
+		if (this.layout === "bar") {
+			this.refEl = fx.createSpan({ cls: "ptb-refchip" });
+			this.refEl.hide();
+		}
 		fx.createSpan({ cls: "ptb-fx-icon", text: "ƒx" });
 		this.formulaInput = fx.createEl("input", {
 			cls: "ptb-fx-input",
-			attr: { type: "text", placeholder: "Value or =SUM(B1:B3)", spellcheck: "false" },
+			attr: { type: "text", placeholder: "Value or =SUM(B2:B4)", spellcheck: "false" },
 		});
+		this.acEl = fx.createDiv({ cls: "ptb-fx-ac" });
+		if (this.layout === "bar") this.summaryEl = fx.createDiv({ cls: "ptb-summary ptb-barsummary" });
 		this.formulaInput.addEventListener("keydown", (e) => {
+			// the suggestion list owns these keys while it is open
+			if (this.acItems.length) {
+				if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+					e.preventDefault();
+					const step = e.key === "ArrowDown" ? 1 : -1;
+					this.acIndex = (this.acIndex + step + this.acItems.length) % this.acItems.length;
+					this.acRender();
+					return;
+				}
+				if (e.key === "Tab" || e.key === "Enter") {
+					e.preventDefault();
+					this.acAccept(this.acIndex);
+					return;
+				}
+				if (e.key === "Escape") {
+					e.preventDefault();
+					this.acClose();
+					return;
+				}
+			}
 			if (e.key === "Enter") {
 				e.preventDefault();
 				this.commitFx();
@@ -2401,10 +3396,44 @@ class PanelUI {
 				this.formulaInput.blur();
 			}
 		});
-		this.formulaInput.addEventListener("blur", () => this.commitFx());
+		this.formulaInput.addEventListener("input", () => {
+			this.acUpdate();
+			this.markPointMode();
+		});
+		this.formulaInput.addEventListener("focus", () => {
+			// capture phase, so a click on a table cell is seen before it can
+			// move focus and fire the blur that commits
+			document.addEventListener("mousedown", this.onPointDown, true);
+			this.markPointMode();
+		});
+		this.formulaInput.addEventListener("blur", () => {
+			document.removeEventListener("mousedown", this.onPointDown, true);
+			this.acClose();
+			this.formulaInput.removeClass("is-pointing");
+			this.commitFx();
+		});
 
-		root.createDiv({ cls: "ptb-label", text: "Text" });
+		if (this.layout !== "bar") root.createDiv({ cls: "ptb-label", text: "Text" });
 		const trow = root.createDiv({ cls: "ptb-iconrow" });
+		// the bar replaces the editor's own toolbar while you are in a table, so
+		// it has to carry the general-purpose tools that still work in a cell
+		if (this.layout === "bar") {
+			this.iconBtn(trow, "undo-2", "Undo", () => this.plugin.editorUndo(false));
+			this.iconBtn(trow, "redo-2", "Redo", () => this.plugin.editorUndo(true));
+			trow.createDiv({ cls: "ptb-vsep" });
+			// Apply-to reads first because it governs nearly everything after it:
+			// bold, alignment, borders, colors, number formats and Clear values
+			// all act at whatever this says.
+			const scope = this.dropBtn(
+				trow,
+				"crosshair",
+				"Cell",
+				"What the buttons after this act on: the targeted cell, its whole row, or its whole column",
+				(e) => this.plugin.showScopeMenu(e)
+			);
+			this.scopeLabel = scope.querySelector(".ptb-droplabel");
+			trow.createDiv({ cls: "ptb-vsep" });
+		}
 		this.iconBtn(trow, "bold", "Bold (Shift: row · Ctrl: column)", (e) => void this.plugin.styleText("bold", e));
 		this.iconBtn(trow, "italic", "Italic (Shift: row · Ctrl: column)", (e) => void this.plugin.styleText("italic", e));
 		this.iconBtn(trow, "strikethrough", "Strikethrough (Shift: row · Ctrl: column)", (e) =>
@@ -2415,19 +3444,31 @@ class PanelUI {
 		this.iconBtn(trow, "align-center", "Align column center", () => void this.plugin.alignColumn("center"));
 		this.iconBtn(trow, "align-right", "Align column right", () => void this.plugin.alignColumn("right"));
 		trow.createDiv({ cls: "ptb-vsep" });
-		this.iconBtn(trow, "square", "Borders (follows Apply to)", (e) => this.plugin.showBordersMenu(e));
+		this.iconBtn(trow, "layout-grid", "Borders (follows Apply to)", (e) => this.plugin.showBordersMenu(e));
 		this.iconBtn(
 			trow,
 			"check-square",
 			"Checkbox: adds/removes [ ] on the cell (follows Apply to); tick the box in Reading view",
 			(e) => void this.plugin.toggleCheckbox(e)
 		);
+		if (this.layout === "bar") {
+			trow.createDiv({ cls: "ptb-vsep" });
+			this.iconBtn(trow, "highlighter", "Highlight with the last highlight color (follows Apply to)", (e) =>
+				void this.plugin.applyLastColor("hl", e)
+			);
+			this.iconBtn(trow, "paintbrush", "Format painter: copy this cell's colors, then click another cell to paint them", () =>
+				this.plugin.togglePainter()
+			);
+			this.iconBtn(trow, "link", "Wrap the cell's text in a link", () => void this.plugin.linkCell());
+		}
 
 		// Visible stand-in for the Shift/Ctrl modifiers: pick a scope once and
 		// colors, text styles, number formats, and Clear values all follow it.
+		this.scopeBtns = [];
+		// the bar already placed it, ahead of the buttons it governs
+		if (this.layout === "bar") return this.buildColorsAndNumbers(root);
 		root.createDiv({ cls: "ptb-label", text: "Apply to" });
 		const scopes = root.createDiv({ cls: "ptb-modes" });
-		this.scopeBtns = [];
 		const scopeDefs: [Scope, string, string][] = [
 			["cell", "Cell", "Act on just the targeted cell"],
 			["row", "Row", "Colors, text styles, number formats, and Clear values act on the whole row"],
@@ -2442,15 +3483,36 @@ class PanelUI {
 			});
 			this.scopeBtns.push([scope, b]);
 		}
+		this.buildColorsAndNumbers(root);
+	}
 
-		root.createDiv({ cls: "ptb-label", text: "Colors" });
-		const modes = root.createDiv({ cls: "ptb-modes" });
+	/** Colors and the number tools, shared by both arrangements. */
+	private buildColorsAndNumbers(root: HTMLElement) {
+		let colorHost = root;
+		if (this.layout === "bar") {
+			// a three-row swatch grid is not a toolbar control, so the whole
+			// section moves behind one button and opens over the table
+			const wrap = root.createDiv({ cls: "ptb-colorwrap" });
+			const trigger = wrap.createEl("button", { cls: "ptb-iconbtn", attr: { title: "Colors", "aria-label": "Colors" } });
+			setIcon(trigger, "palette");
+			this.guard(trigger);
+			const pop = wrap.createDiv({ cls: "ptb-colorpop" });
+			trigger.addEventListener("click", () => pop.toggleClass("is-open", !pop.hasClass("is-open")));
+			this.popClose = (e: MouseEvent) => {
+				if (!(e.target instanceof Node) || !wrap.contains(e.target)) pop.removeClass("is-open");
+			};
+			document.addEventListener("click", this.popClose, true);
+			colorHost = pop;
+		} else {
+			root.createDiv({ cls: "ptb-label", text: "Colors" });
+		}
+		const modes = colorHost.createDiv({ cls: "ptb-modes" });
 		this.fillBtn = this.modeButton(modes, "Fill", "fill");
 		this.textBtn = this.modeButton(modes, "Text", "text");
 		this.hlBtn = this.modeButton(modes, "Highlight", "hl");
-		const grid = root.createDiv({ cls: "ptb-grid" });
+		const grid = colorHost.createDiv({ cls: "ptb-grid" });
 		for (const c of this.plugin.palette()) this.swatch(grid, c);
-		const items = root.createDiv({ cls: "ptb-items" });
+		const items = colorHost.createDiv({ cls: "ptb-items" });
 		const none = items.createEl("button", { cls: "ptb-item" });
 		none.createSpan({ cls: "ptb-noicon" });
 		none.createSpan({ text: "No color" });
@@ -2462,47 +3524,52 @@ class PanelUI {
 		this.moreLabel = more.createSpan({ text: "More colors…" });
 		this.guard(more);
 		more.addEventListener("click", () => this.toggleCustomPicker());
-		this.customInput = this.makeCustomInput(root);
+		this.customInput = this.makeCustomInput(colorHost);
 
-		root.createDiv({ cls: "ptb-label", text: "Number format" });
+		// Two split buttons instead of eight: Excel consolidates its functions
+		// and its number formats the same way, and it is what keeps this usable
+		// when the pane is narrow.
+		if (this.layout !== "bar") root.createDiv({ cls: "ptb-label", text: "Numbers" });
 		const nrow = root.createDiv({ cls: "ptb-iconrow" });
-		const fmts: [NumFmt, string, string][] = [
-			["auto", "Auto", "Plain number"],
-			["number", "123", "Thousands separators + 2 decimals"],
-			["currency", "$", "Currency"],
-			["percent", "%", "Percent"],
-			["date", "Date", "Date, m/d/yyyy (more styles in Format cells…)"],
-		];
-		for (const [fmt, lbl, tip] of fmts) {
-			const b = nrow.createEl("button", {
-				cls: "ptb-iconbtn ptb-fmtbtn",
-				text: lbl,
-				attr: { title: `${tip} (Shift: row · Ctrl: column)` },
-			});
-			this.guard(b);
-			b.addEventListener("click", (e) => void this.plugin.formatNumber(fmt, e));
+		this.dropBtn(nrow, "sigma", "AutoSum", "Sum the selection or the column; the arrow has Average, Count, Max and Min", (e) =>
+			this.plugin.showAutoSumMenu(e)
+		);
+		this.dropBtn(nrow, "hash", "Format", "Number, currency, accounting, date, time and percent, previewed on this cell", (e) =>
+			this.plugin.showNumberFormatMenu(e)
+		);
+		if (this.layout === "bar") {
+			nrow.createDiv({ cls: "ptb-vsep" });
+			this.dropBtn(nrow, "table", "Table", "Rows, columns, totals, sorting and tidying", (e) =>
+				this.plugin.showTableMenu(e)
+			);
+			this.dropBtn(nrow, "database", "Data", "Fill, import, paste, CSV, color rules and clearing", (e) =>
+				this.plugin.showDataMenu(e)
+			);
+			this.dropBtn(nrow, "eye", "View", "How this table looks: guides, stripes, compact, header, sticky, filter", (e) =>
+				void this.plugin.showViewMenu(e)
+			);
 		}
-		const fbtn = root.createEl("button", {
-			cls: "ptb-databtn ptb-fmtcells",
-			attr: { title: "The full Format cells dialog: decimals, negative styles, currency symbols, dates, and times" },
-		});
-		const fic = fbtn.createSpan({ cls: "ptb-btnic" });
-		setIcon(fic, "settings-2");
-		fbtn.createSpan({ text: "Format cells…" });
-		this.guard(fbtn);
-		fbtn.addEventListener("click", () => this.plugin.openFormatModal());
 
+	}
+
+	/** Set once for a table rather than once per cell: the data operations and
+	 *  the per-table appearance flags. These stay in the panel. */
+	private buildPerTable(root: HTMLElement) {
 		root.createDiv({ cls: "ptb-label", text: "Data" });
 		const dgrid = root.createDiv({ cls: "ptb-datagrid" });
-		this.dataBtn(dgrid, "Sum", "Live sum: the column, a drag-selected range, or the cell at the cursor", () =>
-			void this.plugin.calcInto({ fn: "sum", dir: "column" })
-		);
-		this.dataBtn(dgrid, "Formulas", "All live functions: sum, average, min, max, count (column or row)", (e) =>
-			this.plugin.showCalcMenu(e)
-		);
+		// AutoSum lives on the bar when there is one; without a bar the panel is
+		// the only home, so it keeps them
+		// Sum and Formulas used to live here; the Numbers section's AutoSum
+		// dropdown is both of them now, in every layout
 		this.dataBtn(dgrid, "Sort A→Z", "Sort rows by the targeted column, ascending", () => void this.plugin.sortTable("asc"));
 		this.dataBtn(dgrid, "Sort Z→A", "Sort rows by the targeted column, descending", () =>
 			void this.plugin.sortTable("desc")
+		);
+		this.dataBtn(dgrid, "Fill ↓", "Copy the top of the selection down, adjusting references (Excel's Ctrl+D)", () =>
+			void this.plugin.fill("down")
+		);
+		this.dataBtn(dgrid, "Fill →", "Copy the left of the selection right, adjusting references", () =>
+			void this.plugin.fill("right")
 		);
 		this.dataBtn(dgrid, "+ Row", "Insert row below", () => void this.plugin.insertRow("below"));
 		this.dataBtn(dgrid, "+ Column", "Insert column right", () => void this.plugin.insertColumn("right"));
@@ -2550,7 +3617,19 @@ class PanelUI {
 			cls: "ptb-hint",
 			text: "Apply to sets the scope for colors, text styles, number formats, and Clear values; hold Shift (row) or Ctrl (column) on any click for a one-off. Right-click a cell for row/column operations.",
 		});
-		this.refresh();
+	}
+
+	/** A labelled button with a chevron: opens a menu rather than acting. */
+	private dropBtn(parent: HTMLElement, icon: string, label: string, tip: string, fn: (e: MouseEvent) => void) {
+		const b = parent.createEl("button", { cls: "ptb-iconbtn ptb-dropbtn", attr: { "aria-label": tip, title: tip } });
+		const ic = b.createSpan({ cls: "ptb-btnic" });
+		setIcon(ic, icon);
+		b.createSpan({ cls: "ptb-droplabel", text: label });
+		const caret = b.createSpan({ cls: "ptb-dropcaret" });
+		setIcon(caret, "chevron-down");
+		this.guard(b);
+		b.addEventListener("click", (e) => fn(e));
+		return b;
 	}
 
 	private iconBtn(parent: HTMLElement, icon: string, tip: string, fn: (e: MouseEvent) => void) {
@@ -2636,19 +3715,32 @@ class PanelUI {
 	}
 
 	refresh() {
+		// the bar has no per-table sections, so that group is optional here
+		const perTable = this.layout !== "bar";
 		this.mode = this.plugin.settings.lastMode;
-		this.fillBtn.toggleClass("is-active", this.mode === "fill");
-		this.textBtn.toggleClass("is-active", this.mode === "text");
-		this.hlBtn.toggleClass("is-active", this.mode === "hl");
-		for (const [scope, b] of this.scopeBtns) b.toggleClass("is-active", this.plugin.uiScope === scope);
-		this.fillChip.style.backgroundColor = this.plugin.settings.lastFill;
-		this.textChip.style.backgroundColor = this.plugin.settings.lastText;
-		this.hlChip.style.backgroundColor = this.plugin.settings.lastHl;
-		// While the formula bar is being edited, the header and bar stay frozen
-		// on the cell whose content was loaded, the commit goes there too.
-		if (document.activeElement === this.formulaInput) return;
-		this.fxTarget = this.plugin.resolveTarget(true);
-		const ref = this.plugin.currentRef(this.fxTarget);
+		{
+			this.fillBtn.toggleClass("is-active", this.mode === "fill");
+			this.textBtn.toggleClass("is-active", this.mode === "text");
+			this.hlBtn.toggleClass("is-active", this.mode === "hl");
+			for (const [scope, b] of this.scopeBtns) b.toggleClass("is-active", this.plugin.uiScope === scope);
+			// the bar shows the scope on the button itself instead
+			if (this.scopeLabel) {
+				const s = this.plugin.uiScope;
+				this.scopeLabel.setText(s === "cell" ? "Cell" : s === "row" ? "Row" : "Column");
+			}
+			this.fillChip.style.backgroundColor = this.plugin.settings.lastFill;
+			this.textChip.style.backgroundColor = this.plugin.settings.lastText;
+			this.hlChip.style.backgroundColor = this.plugin.settings.lastHl;
+			// While the formula bar is being edited, the header and bar stay
+			// frozen on the cell whose content was loaded; the commit goes there.
+			if (document.activeElement === this.formulaInput) return;
+		}
+		// a live selection is what the buttons will act on, so it is what the
+		// chip and the formula bar have to be describing
+		const selected = this.plugin.selectionDisplay();
+		this.fxTarget = selected?.target ?? this.plugin.resolveTarget(true);
+		this.fxTableEl = this.plugin.targetTableEl();
+		const ref = selected ?? this.plugin.currentRef(this.fxTarget);
 		if (ref) {
 			this.refEl.setText(ref.ref);
 			this.refEl.show();
@@ -2658,6 +3750,7 @@ class PanelUI {
 		this.summaryEl.setText(ref ? ref.summary : "Click a table cell to begin");
 		this.fxLoaded = this.plugin.currentCellRaw(this.fxTarget) ?? "";
 		this.formulaInput.value = this.fxLoaded;
+		if (!perTable) return;
 		const s = this.plugin.settings;
 		const globals: Record<TableFlag, boolean> = {
 			guides: s.cellRefs,
@@ -2708,7 +3801,7 @@ class ColorToolbar {
 		this.makeDraggable(head);
 
 		const body = el.createDiv({ cls: "ptb-body" });
-		this.ui = new PanelUI(plugin, body);
+		this.ui = new PanelUI(plugin, body, plugin.panelLayout());
 
 		const x = this.plugin.settings.toolbarX ?? window.innerWidth - 266;
 		const y = this.plugin.settings.toolbarY ?? 96;
@@ -2769,7 +3862,15 @@ class PowerTablesView extends ItemView {
 	}
 
 	async onOpen() {
-		this.ui = new PanelUI(this.plugin, this.contentEl.createDiv({ cls: "ptb-sidebar" }));
+		this.rebuildUI();
+	}
+
+	/** Rebuild from scratch, for when the bar takes sections away or gives them
+	 *  back: which half this panel owns is decided when it is built. */
+	rebuildUI() {
+		this.ui?.destroy();
+		this.contentEl.empty();
+		this.ui = new PanelUI(this.plugin, this.contentEl.createDiv({ cls: "ptb-sidebar" }), this.plugin.panelLayout());
 	}
 
 	async onClose() {
@@ -2805,6 +3906,43 @@ function floatModal(m: Modal) {
 		window.addEventListener("pointermove", move);
 		window.addEventListener("pointerup", up);
 	});
+}
+
+/** Ask for a link target. The cell's own text becomes the label, so the only
+ *  thing left to supply is where it points. */
+class LinkCellModal extends Modal {
+	private value = "";
+
+	constructor(app: App, private label: string, private onDone: (url: string) => void | Promise<void>) {
+		super(app);
+	}
+
+	onOpen() {
+		this.titleEl.setText("Link this cell");
+		this.contentEl.createDiv({ cls: "ptb-modal-desc", text: `"${this.label}" will become the link's text.` });
+		const input = this.contentEl.createEl("input", {
+			cls: "ptb-csv-input",
+			attr: { type: "text", placeholder: "https://example.com or a note name", spellcheck: "false" },
+		});
+		input.addEventListener("input", () => (this.value = input.value));
+		input.addEventListener("keydown", (e) => {
+			if (e.key !== "Enter") return;
+			e.preventDefault();
+			this.commit();
+		});
+		const btns = this.contentEl.createDiv({ cls: "ptb-modal-btns" });
+		const ok = btns.createEl("button", { cls: "mod-cta", text: "Link" });
+		ok.addEventListener("click", () => this.commit());
+		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		window.setTimeout(() => input.focus(), 0);
+	}
+
+	private commit() {
+		const url = this.value.trim();
+		if (!url) return;
+		this.close();
+		void this.onDone(url);
+	}
 }
 
 class CsvImportModal extends Modal {
@@ -2863,7 +4001,7 @@ class FormulaModal extends Modal {
 		this.target = this.plugin.resolveTarget(true);
 		this.contentEl.createEl("p", {
 			cls: "ptb-modal-desc",
-			text: "Formulas start with = and use column-letter + data-row refs: =SUM(B1:B3), =C1*1.08, =AVG(B1,B3). The computed value is stored in the note and recalculates automatically.",
+			text: "Formulas start with = and use Excel refs, counting the header as row 1: =SUM(B2:B4), =C2*1.08, =AVG(B2,B4). Anchor a reference with $ (=$B$2) to hold it still when the formula is filled. The computed value is stored in the note and recalculates automatically.",
 		});
 		const input = this.contentEl.createEl("input", {
 			cls: "ptb-fx-modal-input",
@@ -3739,9 +4877,25 @@ class PowerTablesSettingTab extends PluginSettingTab {
 			},
 		});
 		panel.push({
+			name: "Table toolbar",
+			desc: "Dock a formatting row and a formula row over the table while the cursor is in one.",
+			help: "Puts the per-cell tools where your hands are: alignment, text styles, colors, number formats and borders on one row, the formula bar on the row below, both docked under the editor's toolbar and only while you are in a table. With this on, the side panel drops those sections and keeps the per-table ones (Data, This table), so every control has one home instead of two. Phones always keep everything in the panel, where two extra rows would cost more than they give.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.tableBar).onChange(async (v) => {
+						this.plugin.settings.tableBar = v;
+						await this.plugin.saveSettings();
+						// the panel's layout is decided at build time, so the
+						// halves swap only on a full re-render
+						this.plugin.refreshSurfaces();
+					})
+				);
+			},
+		});
+		panel.push({
 			name: "Auto-open panel",
-			desc: "Reveal the panel the first time you edit inside a table each session.",
-			help: "The first time you put the cursor inside a table each session, the chosen panel opens itself so the tools are at hand. With this off, open it from the ribbon table icon or the Open panel command.",
+			desc: "Reveal the panel whenever you start working inside a table.",
+			help: "Putting the cursor in a table, or selecting cells in one, opens the panel you chose above (sidebar or floating) so the table tools are at hand. Closing it leaves it closed while you keep working in that table; moving to another one offers it again. With this off, open it from the ribbon table icon or the Open panel command.",
 			build: (s) => {
 				s.addToggle((t) =>
 					t.setValue(this.plugin.settings.autoOpenSidebar).onChange(async (v) => {
@@ -3767,7 +4921,7 @@ class PowerTablesSettingTab extends PluginSettingTab {
 		appearance.push({
 			name: "Cell reference guides",
 			desc: "Show Excel-style column letters above and row numbers beside every table. The panel's This-table buttons override it per table.",
-			help: "Paints column letters (A, B, C) above and row numbers beside each table so cell references in formulas like =SUM(B1:B3) are easy to read and write. Purely visual; nothing is stored in the note.",
+			help: "Paints column letters (A, B, C) above and row numbers beside each table so cell references in formulas like =SUM(B2:B4) are easy to read and write. The header is row 1 and the first data row is 2, the same as Excel. Purely visual; nothing is stored in the note.",
 			build: (s) => {
 				s.addToggle((t) =>
 					t.setValue(this.plugin.settings.cellRefs).onChange(async (v) => {

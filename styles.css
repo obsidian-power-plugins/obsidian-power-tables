@@ -107,8 +107,17 @@ button.ptb-mode:hover {
 
 button.ptb-mode.is-active {
 	background: var(--background-primary);
-	color: var(--text-normal);
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+	color: var(--text-accent);
+	font-weight: 600;
+	box-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.18),
+		inset 0 0 0 1px var(--interactive-accent);
+}
+
+/* the colour chip under the active label picks up the accent ring too, so the
+   selection reads even at a glance across the three */
+button.ptb-mode.is-active .ptb-chip {
+	border-color: var(--interactive-accent);
 }
 
 .ptb-chip {
@@ -167,6 +176,43 @@ button.ptb-stats-btn {
 	border: none;
 	box-shadow: none;
 	cursor: pointer;
+}
+
+/* the actions that belong to a selection, on the same bar as its readout. The
+   bar paints its own dark surface, so these ignore the theme's button colors
+   and take their contrast from it. */
+.ptb-stats-acts {
+	display: flex;
+	align-items: center;
+	gap: 1px;
+	padding-right: 8px;
+	margin-right: 2px;
+	border-right: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+button.ptb-stats-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	box-shadow: none;
+	color: rgba(255, 255, 255, 0.82);
+	cursor: pointer;
+}
+
+button.ptb-stats-icon:hover {
+	background: rgba(255, 255, 255, 0.14);
+	color: #fff;
+}
+
+button.ptb-stats-icon svg {
+	width: 14px;
+	height: 14px;
 }
 
 .ptb-grid.ptb-variants {
@@ -348,6 +394,50 @@ button.ptb-mini {
 	align-items: center;
 	gap: 6px;
 	margin: 2px 0 4px;
+	/* anchors the suggestion list under the input */
+	position: relative;
+}
+
+/* the caret is somewhere a reference could go, so clicking a cell will insert
+   one instead of committing. A quiet cue, since it comes and goes as you type */
+.ptb-fx-input.is-pointing {
+	border-color: var(--interactive-accent);
+}
+
+.ptb-fx-ac {
+	display: none;
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	z-index: var(--layer-popover, 999);
+	max-height: 176px;
+	overflow-y: auto;
+	margin-top: 2px;
+	padding: 2px;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.ptb-fx-ac.is-open {
+	display: block;
+}
+
+.ptb-fx-ac-item {
+	padding: 3px 8px;
+	border-radius: 4px;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--text-normal);
+	cursor: pointer;
+}
+
+.ptb-fx-ac-item:hover,
+.ptb-fx-ac-item.is-active {
+	background-color: var(--background-modifier-hover);
 }
 
 .ptb-fx-icon {
@@ -828,20 +918,33 @@ body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-nog
 	letter-spacing: 0.04em;
 }
 
-/* numbers: every body row (all tbody rows under a thead; skip the header row
-   in thead-less tables), so the first data row is 1 */
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)),
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) {
+/* numbers: the header row is 1 and the body carries on from there, so the
+   gutter reads the way Excel reads and matches what a formula addresses. One
+   selector covers both shapes: with a thead the header is its first row and the
+   body follows; without one, every row of the leading tbody counts, header
+   included. */
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, thead ~ tbody > tr, tbody:first-child > tr),
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, thead ~ tbody > tr, tbody:first-child > tr) {
 	counter-increment: ptbrow;
 }
 
+/* body rows anchor the number on the cell; the header row anchors it on the tr
+   instead, because a sticky header th must keep `position: sticky` and these
+   selectors would outspecify that rule. Both resolve to the same left edge, and
+   a sticky th is its own containing block anyway, so the number rides along. */
 body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child {
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child,
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child),
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) {
 	position: relative;
 }
 
+/* the header's number rides on ::after because ::before there is already its
+   column letter */
 body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before {
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before,
+body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *:first-child::after,
+:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *:first-child::after {
 	content: counter(ptbrow);
 	position: absolute;
 	left: -24px;
@@ -1085,4 +1188,246 @@ body.theme-light .notice:not(.pw-self-styled) {
 
 body.theme-light .notice:not(.pw-self-styled) a {
 	color: var(--text-accent);
+}
+
+/* ---------- the table bar: formatting and formula, docked over the table ----
+   Mounted before .view-content, so it sits under whatever toolbar the editor
+   already has there. The panel's own sections are reused verbatim and this
+   turns their vertical stack into two rows: controls, then the formula. */
+
+.ptb-tablebar {
+	flex: 0 0 auto;
+	padding: 4px 10px 5px;
+	background-color: var(--background-primary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ptb-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 3px;
+}
+
+/* the formula takes the whole second row, the way a spreadsheet stacks it */
+.ptb-bar .ptb-fx {
+	order: 2;
+	flex: 1 0 100%;
+	margin: 3px 0 0;
+}
+
+.ptb-bar .ptb-refchip {
+	margin: 0 2px 0 0;
+}
+
+/* groups sit inline instead of stacking, with a hairline between them */
+.ptb-bar .ptb-iconrow,
+.ptb-bar .ptb-modes {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	width: auto;
+	margin: 0;
+	padding: 0 5px;
+	border: none;
+	border-right: 1px solid var(--background-modifier-border);
+	background: none;
+}
+
+.ptb-bar > :first-child {
+	padding-left: 0;
+}
+
+/* Apply-to reads as a segmented control in the panel; here it is three buttons */
+.ptb-bar .ptb-mode {
+	height: 24px;
+	padding: 0 8px;
+	font-size: 11px;
+	white-space: nowrap;
+}
+
+.ptb-bar .ptb-fmtcells {
+	width: auto;
+	height: 24px;
+	margin: 0 0 0 5px;
+	padding: 0 8px;
+	font-size: 11px;
+}
+
+.ptb-bar .ptb-vsep {
+	width: 1px;
+	height: 16px;
+	margin: 0 6px;
+	background-color: var(--background-modifier-border);
+}
+
+/* colors live behind one button up here: a three-row swatch grid is a panel
+   control, not a toolbar one */
+.ptb-colorwrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	padding: 0 5px;
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+.ptb-colorpop {
+	display: none;
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: var(--layer-popover, 999);
+	width: 248px;
+	padding: 8px;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+.ptb-colorpop.is-open {
+	display: block;
+}
+
+.ptb-colorpop .ptb-modes {
+	width: 100%;
+}
+
+/* phones keep everything in the panel, so the bar never costs them two rows */
+.is-phone .ptb-tablebar {
+	display: none;
+}
+
+/* split buttons: an icon, a label, and a chevron that says it opens a menu.
+   Two of these stand in for eight, which is what keeps the bar usable when the
+   pane is narrow. */
+button.ptb-dropbtn {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	/* .ptb-iconbtn carries flex: 1 so icon buttons share a row evenly; a split
+	   button is as wide as its label and no wider, or it eats the bar */
+	flex: 0 0 auto;
+	width: auto;
+	min-width: 0;
+	height: 26px;
+	padding: 0 5px;
+	font-size: 11px;
+	white-space: nowrap;
+}
+
+.ptb-droplabel {
+	line-height: 1;
+}
+
+.ptb-dropcaret {
+	display: flex;
+	align-items: center;
+	opacity: 0.55;
+}
+
+.ptb-dropcaret svg {
+	width: 10px;
+	height: 10px;
+}
+
+.ptb-dropbtn .ptb-btnic svg {
+	width: 13px;
+	height: 13px;
+}
+
+/* a labelled button sitting among icon buttons needs a touch more breathing
+   room than the 2px gap they share */
+.ptb-bar .ptb-iconrow button.ptb-dropbtn {
+	margin: 0 1px;
+}
+
+/* what the panel used to say under its title, kept where a spreadsheet keeps
+   it: the far end of the formula row */
+.ptb-barsummary {
+	flex: 0 0 auto;
+	margin: 0 0 0 6px;
+	color: var(--text-muted);
+	font-size: 11.5px;
+	white-space: nowrap;
+}
+
+/* Narrow panes: let a group's buttons wrap onto another line instead of
+   running off the edge, which silently hid the last three menus. */
+.ptb-bar .ptb-iconrow,
+.ptb-bar .ptb-modes {
+	flex-wrap: wrap;
+	min-width: 0;
+}
+
+.ptb-tablebar {
+	overflow: visible;
+}
+
+/* Double edges. "=b" still contains "b", so the thin rule above matches first
+   and these only have to override the style and width; they sit after it in the
+   file for exactly that reason. 3px is the least that renders as two lines. */
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="=t"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="=t"]) {
+	border-top: 3px double var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="=b"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="=b"]) {
+	border-bottom: 3px double var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="=l"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="=l"]) {
+	border-left: 3px double var(--text-normal);
+}
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="=r"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="=r"]) {
+	border-right: 3px double var(--text-normal);
+}
+
+/* Dashed and dotted edges, and the pen colours. Same trick as the doubles: the
+   marked form still contains the edge letter, so the rule that paints that edge
+   matches first and these only override style, width, or colour. */
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="~t"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="~t"]) { border-top-style: dashed; }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="~b"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="~b"]) { border-bottom-style: dashed; }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="~l"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="~l"]) { border-left-style: dashed; }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="~r"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="~r"]) { border-right-style: dashed; }
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*=".t"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*=".t"]) { border-top-style: dotted; }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*=".b"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*=".b"]) { border-bottom-style: dotted; }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*=".l"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*=".l"]) { border-left-style: dotted; }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*=".r"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*=".r"]) { border-right-style: dotted; }
+
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#red"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#red"]) { border-color: var(--color-red, #e93147); }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#orange"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#orange"]) { border-color: var(--color-orange, #ec7500); }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#yellow"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#yellow"]) { border-color: var(--color-yellow, #e0ac00); }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#green"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#green"]) { border-color: var(--color-green, #08b94e); }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#blue"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#blue"]) { border-color: var(--color-blue, #086ddd); }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#purple"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#purple"]) { border-color: var(--color-purple, #7852ee); }
+.markdown-rendered :is(td, th):has(span.ptb[data-b*="#grey"]),
+.cm-table-widget :is(td, th):has(span.ptb[data-b*="#grey"]) { border-color: var(--text-faint); }
+
+/* the pen is armed: the table says so, and the pointer says what it will do */
+body.ptb-drawing :is(.markdown-rendered, .cm-table-widget) table :is(td, th) {
+	cursor: crosshair;
+}
+
+body.ptb-drawing-erase :is(.markdown-rendered, .cm-table-widget) table :is(td, th) {
+	cursor: cell;
 }

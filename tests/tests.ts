@@ -16,6 +16,8 @@ import {
 	formatTimeSpec,
 	matchCriteria,
 	mergeBorders,
+	planDrawBorders,
+	splitBorders,
 	parseDateCell,
 	parseTimeCell,
 	planBorders,
@@ -71,8 +73,40 @@ import {
 	recalcCalcs,
 	shadeVariants,
 	tableFromRows,
+	tableGrid,
+	gridRowOf,
+	shiftFormulaRefs,
+	formulaErrorText,
+	FORMULA_FUNCTIONS,
+	applyCompletion,
+	completionsAt,
+	refInsertAllowed,
+	planFill,
 	mergeForSave,
 } from "../src/cells";
+
+/** Mirrors the vault applier in main.ts: edit line numbers are in original
+ *  document space, so walk ascending and carry the shift as you go. */
+function applyPlan(lines: string[], plan: { edits: { line: number; text: string; kind?: string }[] } | null): string[] {
+	if (!plan) return lines;
+	const out = lines.slice();
+	let off = 0;
+	for (const e of [...plan.edits].sort((a, b) => a.line - b.line)) {
+		const idx = e.line + off;
+		if (e.kind === "insert") {
+			out.splice(Math.max(0, Math.min(idx, out.length)), 0, e.text);
+			off++;
+		} else if (e.kind === "delete") {
+			if (idx >= 0 && idx < out.length) {
+				out.splice(idx, 1);
+				off--;
+			}
+		} else if (idx >= 0 && idx < out.length) {
+			out[idx] = e.text;
+		}
+	}
+	return out;
+}
 
 let failures = 0;
 
@@ -467,10 +501,67 @@ fc = planFormatCells(RC.slice(), { line: 2, col: 0, expect: null }, SPEC, "cell"
 eq(fc.edits[0].text, "| -5.00 |", "leaving red style clears the red and unwraps");
 
 // --- borders ---
-eq(mergeBorders(null, [{ edge: "bottom", thick: false }]), "b", "single edge");
-eq(mergeBorders("b", [{ edge: "top", thick: true }]), "Tb", "merge keeps canonical order");
-eq(mergeBorders("B", [{ edge: "bottom", thick: false }]), "b", "explicit thin replaces thick");
+eq(mergeBorders(null, [{ edge: "bottom", weight: "thin" }]), "b", "single edge");
+eq(mergeBorders("b", [{ edge: "top", weight: "thick" }]), "Tb", "merge keeps canonical order");
+eq(mergeBorders("B", [{ edge: "bottom", weight: "thin" }]), "b", "explicit thin replaces thick");
+eq(mergeBorders(null, [{ edge: "bottom", weight: "double" }]), "=b", "a double edge writes its = marker");
+eq(mergeBorders("t", [{ edge: "bottom", weight: "double" }]), "t=b", "double merges alongside a thin edge");
+eq(mergeBorders("=b", [{ edge: "bottom", weight: "thin" }]), "b", "setting thin clears the double");
+eq(mergeBorders("=b", [{ edge: "top", weight: "thin" }]), "t=b", "an existing double survives another edge");
+eq(mergeBorders("=t=b=l=r", []), "=t=b=l=r", "every edge can be double and round-trips");
+eq(mergeBorders("Tb", []), "Tb", "strings from before doubles existed parse unchanged");
+eq(mergeBorders(null, [{ edge: "top", weight: "dashed" }]), "~t", "dashed writes its own marker");
+eq(mergeBorders(null, [{ edge: "top", weight: "dotted" }]), ".t", "so does dotted");
+eq(mergeBorders("~t.b", []), "~t.b", "mixed styles round-trip");
+eq(mergeBorders(null, [{ edge: "top", weight: "thin" }], "red"), "t#red", "a pen colour rides on the end");
+eq(mergeBorders("t#red", [{ edge: "bottom", weight: "thin" }]), "tb#red", "and survives another edge");
+eq(mergeBorders("t#red", [], null), "t", "passing null clears the colour");
+eq(splitBorders("=t~b#blue").edges, "=t~b", "splitBorders separates the edges");
+eq(splitBorders("=t~b#blue").color, "blue", "and the colour");
+eq(splitBorders("tb").color, null, "with no colour when there is none");
+eq(splitBorders("tb#nonsense").color, null, "and none for a colour it does not know");
+
+// the pen: a stroke becomes one edit, whatever it crossed
+const DBT = ["| A | B |", "| - | - |", "| 1 | 2 |", "| 3 | 4 |"];
+const drawn = planDrawBorders(
+	DBT.slice(),
+	[
+		{ line: 2, col: 0, edge: "bottom" },
+		{ line: 2, col: 1, edge: "bottom" },
+	],
+	{ tool: "border", weight: "dashed", color: "red" }
+)!;
+eq(drawn.edits.length, 1, "two cells on one row are a single edit");
+ok(drawn.edits[0].text.includes('data-b="~b#red"'), "the pen lays down its style and colour");
+const gridded = planDrawBorders(DBT.slice(), [{ line: 3, col: 1 }], { tool: "grid", weight: "thin", color: null })!;
+ok(gridded.edits[0].text.includes('data-b="tblr"'), "the grid pen draws all four edges");
+const erased = planDrawBorders(
+	[DBT[0], DBT[1], DBT[2], '| 3 | <span class="ptb" data-b="tblr">4</span> |'],
+	[{ line: 3, col: 1 }],
+	{ tool: "erase", weight: "thin", color: null }
+)!;
+ok(!erased.edits[0].text.includes("data-b"), "the eraser takes them all off again");
+eq(planDrawBorders(DBT.slice(), [], { tool: "grid", weight: "thin", color: null }), null, "an empty stroke plans nothing");
 const BT = ["| A | B | C |", "| - | - | - |", "| 1 | 2 | 3 |", "| 4 | 5 | 6 |"];
+// the stacked presets, end to end: over a column they put the top edge on the
+// first row and the bottom edge on the last, each with its own weight
+const stack = (action: Parameters<typeof planBorders>[2]) => {
+	const out = BT.slice();
+	const p = planBorders(out, { line: 2, col: 1, expect: null }, action, "column")!;
+	for (const e of p.edits) out[e.line] = e.text;
+	return out;
+};
+// a column selection starts at the header, so that is where its top edge goes
+const sTB = stack("topdoublebottom");
+ok(sTB[0].includes('data-b="t"'), "top and double bottom puts a thin top on the column's first cell");
+ok(sTB[3].includes('data-b="=b"'), "and a double bottom on its last");
+ok(!sTB[2].includes("data-b"), "leaving the rows between untouched");
+const sThick = stack("topthickbottom");
+ok(sThick[3].includes('data-b="B"'), "top and thick bottom writes the thick marker");
+const sPlain = stack("topbottom");
+ok(sPlain[0].includes('data-b="t"') && sPlain[3].includes('data-b="b"'), "top and bottom are both thin");
+const sBot = stack("doublebottom");
+ok(!sBot[0].includes("data-b") && sBot[3].includes('data-b="=b"'), "a bottom-only preset leaves the top alone");
 let bp = planBorders(BT.slice(), { line: 2, col: 1, expect: null }, "all", "cell")!;
 ok(bp.edits[0].text.includes('data-b="tblr"'), "all borders on a cell");
 bp = planBorders(BT.slice(), { line: 2, col: 0, expect: null }, "outside", "row")!;
@@ -622,17 +713,44 @@ eq(threw, 4, "self-ref, out-of-range, div-by-zero, and syntax errors all throw")
 eq(formatFormulaResult(1774.4400000000003), "1774.44", "formula results round cleanly");
 ok(looksLikeFormula("=SUM(B1:B3)") && looksLikeFormula("=C1*2") && !looksLikeFormula("=hello world"), "formula detection heuristics");
 
+// --- Excel-literal row numbers: the header is row 1, data starts at 2 ---
+const XL = ["| Loc | Count |", "| - | - |", "| PH | 70 |", "| US | 30 |", "| Total | |"];
+const xg = tableGrid(XL, 0)!;
+eq(xg.rows.length, 4, "the grid counts the header as a row");
+eq(xg.rows[0][0], "Loc", "grid row 0 is the header");
+eq(gridRowOf(xg, 0), 0, "the header line is grid row 0, addressed as 1");
+eq(gridRowOf(xg, 2), 1, "the first data line is grid row 1, addressed as 2");
+eq(gridRowOf(xg, 1), -1, "the delimiter line is not a row at all");
+eq(evalFormula("=B1", xg.rows, 3, 1), "Count", "B1 addresses the header cell");
+eq(evalFormula("=SUM(B2:B3)", xg.rows, 3, 1), 100, "data rows are numbered from 2");
+const xlp = planSetCellValue(XL.slice(), { line: 4, col: 1, expect: null }, "=SUM(B2:B3)")!;
+ok(xlp.edits[0].text.includes(">100</span>"), "a total row sums its Excel-numbered data rows");
+
+// a header cell can hold a formula, and it computes and is referable like any
+// other cell now that it has an address
+const XH = ["| Item | =SUM(B2:B3) |", "| - | - |", "| a | 4 |", "| b | 6 |", "| echo | |"];
+const xh = recalcCalcs(XH.slice());
+const xhHead = xh.find((e) => e.line === 0);
+ok(!!xhHead && xhHead.text.includes(">10</span>"), "a formula in the header row computes");
+const XH2 = XH.slice();
+for (const e of xh) XH2[e.line] = e.text;
+const xhEcho = planSetCellValue(XH2.slice(), { line: 4, col: 1, expect: null }, "=B1")!;
+ok(xhEcho.edits[0].text.includes(">10</span>"), "a header formula's value is addressable as row 1");
+const xg2 = tableGrid(XH2, 0)!;
+eq(evalFormula("=SUM(B:B)", xg2.rows, gridRowOf(xg2, 4), 1), 20, "B:B spans the header too, Excel-style");
+eq(recalcCalcs(XH2).length, 0, "a header formula settles at a fixpoint");
+
 // --- formula cells in recalc: typed "=…" converts, chains recompute ---
 const FR = [
 	"| A | B |",
 	"| - | - |",
-	"| 2 | =A1*10 |",
+	"| 2 | =A2*10 |",
 	"| 3 | 5 |",
 	'| Total | <span class="ptb" data-calc="sum:col">0</span> |',
 ];
 const fre = recalcCalcs(FR.slice());
 const frLine2 = fre.find((e) => e.line === 2);
-ok(!!frLine2 && frLine2.text.includes('data-f="=A1*10"') && frLine2.text.includes(">20</span>"), "typed formula converts to live cell with value");
+ok(!!frLine2 && frLine2.text.includes('data-f="=A2*10"') && frLine2.text.includes(">20</span>"), "typed formula converts to live cell with value");
 const frTotal = fre.find((e) => e.line === 4);
 ok(!!frTotal && frTotal.text.includes(">25</span>"), "column sum includes computed formula value");
 const FR2 = FR.slice();
@@ -645,8 +763,8 @@ ok(fre3.some((e) => e.text.includes(">40</span>")), "editing a referenced cell r
 
 // --- planSetCellValue ---
 const SV = ["| A | B |", "| - | - |", "| 5 | 7 |"];
-let sv = planSetCellValue(SV.slice(), { line: 2, col: 1, expect: null }, "=A1*2")!;
-ok(sv.edits[0].text.includes('data-f="=A1*2"') && sv.edits[0].text.includes(">10</span>"), "formula bar commit creates live formula");
+let sv = planSetCellValue(SV.slice(), { line: 2, col: 1, expect: null }, "=A2*2")!;
+ok(sv.edits[0].text.includes('data-f="=A2*2"') && sv.edits[0].text.includes(">10</span>"), "formula bar commit creates live formula");
 const SV2 = SV.slice();
 SV2[2] = sv.edits[0].text;
 sv = planSetCellValue(SV2, { line: 2, col: 1, expect: null }, "plain")!;
@@ -709,7 +827,7 @@ ok(emr.length === 1 && emr[0].text.includes(">**6**</span>"), "bold live calc up
 const EMC2 = EMC.slice();
 EMC2[4] = `| <span class="ptb" data-calc="sum:col">**6**</span> |`;
 eq(recalcCalcs(EMC2).length, 0, "bold live calc at fixpoint is untouched");
-const EMF = ["| A | B |", "| - | - |", `| 3 | <span class="ptb" data-f="=A1*2">~~**4**~~</span> |`];
+const EMF = ["| A | B |", "| - | - |", `| 3 | <span class="ptb" data-f="=A2*2">~~**4**~~</span> |`];
 const emf = recalcCalcs(EMF.slice());
 ok(emf.length === 1 && emf[0].text.includes(">~~**6**~~</span>"), "nested emphasis survives formula recompute");
 const nspec2 = fmtFromTag("n:2:1:minus")!;
@@ -718,17 +836,243 @@ ok((formatPiece(" **1644** ", nspec2) ?? "").includes("**1,644.00**"), "sticky f
 const ASEL = ["| A | B |", "| - | - |", "| x | 98.55 |", "| y | 44.9 |", "| z | |"];
 const selT = [{ line: 2, col: 1 }, { line: 3, col: 1 }, { line: 4, col: 1 }];
 let asp = planSelectionCalc(ASEL.slice(), selT, "sum")!;
-ok(asp.edits[0].text.includes(`data-f="=SUM(B1:B2)"`), "selection sum writes a range formula into the empty cell");
+ok(asp.edits[0].text.includes(`data-f="=SUM(B2:B3)"`), "selection sum writes a range formula into the empty cell");
 ok(asp.edits[0].text.includes(">143.45</span>"), "selection sum computes the value");
 eq(asp.count, 2, "selection sum counts numeric cells");
 const ASEL2 = ["| A | B |", "| - | - |", "| x | 10 |", "| y | 20 |", "| | |"];
 asp = planSelectionCalc(ASEL2.slice(), [{ line: 2, col: 1 }, { line: 3, col: 1 }], "sum")!;
-ok(asp.edits[0].line === 4 && asp.edits[0].text.includes("=SUM(B1:B2)"), "all-numeric selection lands the result just below");
+ok(asp.edits[0].line === 4 && asp.edits[0].text.includes("=SUM(B2:B3)"), "all-numeric selection lands the result just below");
 asp = planSelectionCalc(["| A |", "| - |", "| x |", "| |"], [{ line: 2, col: 0 }, { line: 3, col: 0 }], "sum")!;
 eq(asp.count, 0, "selection with no numbers reports zero");
 const ASEL3 = ["| A | B | C |", "| - | - | - |", "| 5 | 7 | |"];
 asp = planSelectionCalc(ASEL3.slice(), [{ line: 2, col: 0 }, { line: 2, col: 1 }, { line: 2, col: 2 }], "avg")!;
-ok(asp.edits[0].text.includes(`data-f="=AVG(A1:B1)"`) && asp.edits[0].text.includes(">6</span>"), "horizontal selection trims the range to the left of the result");
+ok(asp.edits[0].text.includes(`data-f="=AVG(A2:B2)"`) && asp.edits[0].text.includes(">6</span>"), "horizontal selection trims the range to the left of the result");
+// --- structural reference rewriting ---
+eq(shiftFormulaRefs("=SUM(D2:D3)", { axis: "row", kind: "insert", at: 2 }), "=SUM(D2:D4)", "an insert inside a range stretches it");
+eq(shiftFormulaRefs("=SUM(D2:D3)", { axis: "row", kind: "insert", at: 1 }), "=SUM(D3:D4)", "an insert above a range slides it down");
+eq(shiftFormulaRefs("=SUM(D2:D3)", { axis: "row", kind: "insert", at: 3 }), "=SUM(D2:D3)", "an insert below a range leaves it alone");
+eq(shiftFormulaRefs("=SUM(D2:D3)", { axis: "row", kind: "delete", at: 1 }), "=SUM(D2:D2)", "a delete inside a range shrinks it");
+eq(shiftFormulaRefs("=B3*C3", { axis: "row", kind: "delete", at: 2 }), "=#REF!*#REF!", "deleting the referenced row kills the ref");
+eq(shiftFormulaRefs("=B3*C3", { axis: "row", kind: "offset", delta: 1 }), "=B4*C4", "offset is the relative rule a copy follows");
+eq(shiftFormulaRefs("=B2*C2", { axis: "col", kind: "insert", at: 1 }), "=C2*D2", "a column insert shifts the letters");
+eq(shiftFormulaRefs("=B2*C2", { axis: "col", kind: "delete", at: 1 }), "=#REF!*B2", "a column delete kills the ref that named it");
+eq(shiftFormulaRefs("=SUM(B:B)", { axis: "col", kind: "insert", at: 0 }), "=SUM(C:C)", "a whole-column range follows the shift");
+eq(shiftFormulaRefs("=SUM(2:3)", { axis: "row", kind: "insert", at: 1 }), "=SUM(3:4)", "a whole-row range follows the shift");
+eq(shiftFormulaRefs("=IF(A2='B2', B2, 0)", { axis: "row", kind: "insert", at: 1 }), "=IF(A3='B2', B3, 0)", "text inside quotes is never a reference");
+eq(shiftFormulaRefs("=#REF!+B2", { axis: "row", kind: "insert", at: 1 }), "=#REF!+B3", "an already dead ref stays dead");
+const PERM = { axis: "row" as const, kind: "permute" as const, map: [0, 2, 1, 3] };
+eq(shiftFormulaRefs("=B2*C2", PERM), "=B3*C3", "a permuted ref follows its row");
+eq(shiftFormulaRefs("=SUM(D2:D3)", PERM), "=SUM(D2:D3)", "a range permuted within itself still covers the block");
+eq(formulaErrorText(new Error("#REF!")), "#REF!", "a named formula error keeps its name");
+eq(formulaErrorText(new Error("bad token")), "#ERR", "any other failure is the generic error");
+
+// end to end: the structural planners keep formulas pointing where they should
+const SREF = [
+	"| Item | Qty | Price | Total |",
+	"| - | - | - | - |",
+	"| a | 2 | 10 | =B2*C2 |",
+	"| b | 3 | 20 | =B3*C3 |",
+	"| Total | | | =SUM(D2:D3) |",
+];
+const SREFS = applyPlan(SREF, { edits: recalcCalcs(SREF.slice()) });
+ok(SREFS[2].includes(">20<") && SREFS[3].includes(">60<") && SREFS[4].includes(">80<"), "baseline table computes 20, 60, 80");
+const settle = (ls: string[]) => applyPlan(ls, { edits: recalcCalcs(ls.slice()) });
+
+const insR = settle(applyPlan(SREFS, planInsertRow(SREFS.slice(), { line: 3, col: 0, expect: null }, "above")));
+ok(insR[5].includes("=SUM(D2:D4)") && insR[5].includes(">80<"), "inserting a row stretches the total and keeps its value");
+ok(insR[4].includes("=B4*C4") && insR[4].includes(">60<"), "a row pushed down still points at its own cells");
+
+const delR = settle(applyPlan(SREFS, planDeleteRow(SREFS.slice(), { line: 2, col: 0, expect: null })));
+ok(delR[3].includes("=SUM(D2:D2)") && delR[3].includes(">60<"), "deleting a row shrinks the range instead of dropping a row silently");
+
+const dupR = settle(applyPlan(SREFS, planDuplicateRow(SREFS.slice(), { line: 2, col: 0, expect: null })));
+ok(dupR[3].includes("=B3*C3") && dupR[3].includes(">20<"), "a duplicated row computes from its own cells, not the original's");
+ok(dupR[5].includes(">100<"), "and the total picks the duplicate up");
+
+const mvR = settle(applyPlan(SREFS, planMoveRow(SREFS.slice(), { line: 2, col: 0, expect: null }, 1)));
+ok(mvR[2].includes(">60<") && mvR[3].includes(">20<"), "moving a row carries its references with it");
+
+const srtR = settle(applyPlan(SREFS, planSort(SREFS.slice(), { line: 2, col: 1, expect: null }, "desc")));
+ok(srtR[2].includes(">60<") && srtR[3].includes(">20<"), "sorting leaves every row computing its own numbers");
+ok(srtR[4].includes(">80<"), "and the total still covers the whole block");
+
+const insC = settle(applyPlan(SREFS, planInsertColumn(SREFS.slice(), { line: 2, col: 1, expect: null }, "left")));
+ok(insC[2].includes("=C2*D2") && insC[2].includes(">20<"), "inserting a column shifts every letter past it");
+
+const delC = settle(applyPlan(SREFS, planDeleteColumn(SREFS.slice(), { line: 2, col: 1, expect: null })));
+ok(delC[2].includes("#REF!"), "deleting a referenced column reports #REF! instead of a wrong number");
+
+// --- $ anchoring ---
+eq(evalFormula("=$B$2", G, 5, 5), 20, "an anchored ref resolves to the same cell as a plain one");
+eq(evalFormula("=SUM($A$1:$A$3)", G, 3, 0), 6, "anchors are ignored inside a range");
+eq(evalFormula("=SUM($A:$A)", G, 3, 1), 6, "an anchored whole-column range still works");
+eq(evalFormula("=SUM($1:$1)", G, 3, 0), 11, "an anchored whole-row range still works");
+ok(looksLikeFormula("=$B$2*2"), "an anchored formula is still detected as one");
+eq(shiftFormulaRefs("=$B$2*C3", { axis: "row", kind: "offset", delta: 1 }), "=$B$2*C4", "a fill leaves an anchored row alone");
+eq(shiftFormulaRefs("=$B2*C3", { axis: "col", kind: "offset", delta: 1 }), "=$B2*D3", "a fill leaves an anchored column alone");
+eq(shiftFormulaRefs("=B$2*C3", { axis: "row", kind: "offset", delta: 2 }), "=B$2*C5", "a mixed ref pins only its anchored half");
+eq(shiftFormulaRefs("=SUM($D$2:D3)", { axis: "row", kind: "offset", delta: 1 }), "=SUM($D$2:D4)", "an anchored range end holds while the other travels");
+eq(shiftFormulaRefs("=$B$2", { axis: "row", kind: "insert", at: 1 }), "=$B$3", "an insert moves an anchored ref too, since the cell itself moved");
+
+// --- fill down and fill right ---
+const FILL = [
+	"| Item | Qty | Price | Total |",
+	"| - | - | - | - |",
+	"| a | 2 | 10 | =B2*C2 |",
+	"| b | 3 | 20 | |",
+	"| c | 4 | 30 | |",
+];
+const FILLS = applyPlan(FILL, { edits: recalcCalcs(FILL.slice()) });
+const fillDown = settle(
+	applyPlan(FILLS, planFill(FILLS.slice(), [{ line: 2, col: 3 }, { line: 3, col: 3 }, { line: 4, col: 3 }], "down"))
+);
+ok(fillDown[3].includes("=B3*C3") && fillDown[3].includes(">60<"), "fill down re-points the formula at each row");
+ok(fillDown[4].includes("=B4*C4") && fillDown[4].includes(">120<"), "and carries on to the end of the selection");
+const fillOne = settle(applyPlan(FILLS, planFill(FILLS.slice(), [{ line: 3, col: 3 }], "down")));
+ok(fillOne[3].includes("=B3*C3") && fillOne[3].includes(">60<"), "a lone cell fills from the row above it");
+eq(planFill(FILLS.slice(), [{ line: 0, col: 3 }], "down"), null, "the header has nothing above it to fill from");
+
+const RATE = ["| Item | Price | Tax |", "| - | - | - |", "| rate | 0.1 | |", "| a | 100 | =B3*$B$2 |", "| b | 200 | |"];
+const RATES = applyPlan(RATE, { edits: recalcCalcs(RATE.slice()) });
+const fillAnchored = settle(applyPlan(RATES, planFill(RATES.slice(), [{ line: 3, col: 2 }, { line: 4, col: 2 }], "down")));
+ok(fillAnchored[4].includes("=B4*$B$2"), "a fill moves the relative ref and pins the anchored one");
+ok(fillAnchored[4].includes(">20<"), "so the filled row reads its own price against the shared rate");
+
+const SIDE = ["| A | B | C |", "| - | - | - |", "| 5 | =A2*2 | |"];
+const SIDES = applyPlan(SIDE, { edits: recalcCalcs(SIDE.slice()) });
+const fillRight = settle(applyPlan(SIDES, planFill(SIDES.slice(), [{ line: 2, col: 1 }, { line: 2, col: 2 }], "right")));
+ok(fillRight[2].includes("=B2*2") && fillRight[2].includes(">20<"), "fill right shifts the column letter");
+
+// --- operators: ^ & % ---
+const errOf = (f: () => unknown): string => {
+	try {
+		f();
+		return "(no error)";
+	} catch (e) {
+		return formulaErrorText(e);
+	}
+};
+eq(evalFormula("=A2^3", G, 5, 5), 8, "^ raises to a power");
+eq(evalFormula("=2^3^2", [[""]], 5, 5), 512, "^ is right associative, as in Excel");
+eq(evalFormula("=-2^2", [[""]], 5, 5), 4, "unary minus binds tighter than ^, as in Excel");
+eq(evalFormula("=A2*50%", G, 5, 5), 1, "% is a postfix hundredth");
+eq(evalFormula("=-50%", [[""]], 5, 5), -0.5, "% applies after the sign");
+eq(evalFormula("='Total: '&A2", G, 5, 5), "Total: 2", "& joins text to a number");
+eq(evalFormula("=A2&B2", G, 5, 5), "220", "& stringifies both sides");
+eq(evalFormula("=1&2='12'", [[""]], 5, 5), 1, "& binds tighter than comparison");
+eq(errOf(() => evalFormula("=1/0", [[""]], 5, 5)), "#DIV/0!", "dividing by zero says which error it is");
+
+// --- new functions ---
+eq(evalFormula("=MEDIAN(A1:A3)", G, 5, 5), 2, "MEDIAN");
+eq(evalFormula("=PRODUCT(A1:A3)", G, 5, 5), 6, "PRODUCT");
+eq(evalFormula("=SUMPRODUCT(A1:A3,B1:B3)", G, 5, 5), 141.5, "SUMPRODUCT pairs the ranges off position by position");
+eq(evalFormula("=STDEV(A1:A3)", G, 5, 5), 1, "STDEV is the sample deviation");
+eq(evalFormula("=POWER(2,10)", [[""]], 5, 5), 1024, "POWER");
+eq(evalFormula("=SQRT(144)", [[""]], 5, 5), 12, "SQRT");
+eq(evalFormula("=INT(2.9)", [[""]], 5, 5), 2, "INT floors");
+eq(evalFormula("=MOD(-3,5)", [[""]], 5, 5), 2, "MOD takes the divisor's sign, as Excel does");
+eq(evalFormula("=ROUNDUP(2.01,1)", [[""]], 5, 5), 2.1, "ROUNDUP");
+eq(evalFormula("=ROUNDDOWN(2.09,1)", [[""]], 5, 5), 2, "ROUNDDOWN");
+eq(evalFormula("=ROUNDDOWN(-2.09,1)", [[""]], 5, 5), -2, "ROUNDDOWN goes toward zero");
+eq(evalFormula("=COUNTA(A1:A4)", G, 5, 5), 3, "COUNTA skips the blank");
+eq(evalFormula("=COUNTBLANK(A1:A4)", G, 5, 5), 1, "COUNTBLANK counts only the blank");
+eq(evalFormula("=AND(1,1)", [[""]], 5, 5), 1, "AND");
+eq(evalFormula("=AND(1,0)", [[""]], 5, 5), 0, "AND is false when any argument is");
+eq(evalFormula("=OR(0,1)", [[""]], 5, 5), 1, "OR");
+eq(evalFormula("=NOT(0)", [[""]], 5, 5), 1, "NOT");
+eq(evalFormula("=AVERAGEIF(A1:A3,'>1')", G, 5, 5), 2.5, "AVERAGEIF");
+eq(evalFormula("=IFERROR(1/0,'safe')", [[""]], 5, 5), "safe", "IFERROR catches a first argument that throws");
+eq(evalFormula("=IFERROR(A2,'safe')", G, 5, 5), 2, "IFERROR passes a good value straight through");
+eq(evalFormula("=IFERROR(1/0,A2)", G, 5, 5), 2, "IFERROR can fall back to a reference");
+eq(evalFormula("=IFERROR(SUM(A1:A3),0)", G, 5, 5), 6, "IFERROR handles a nested call in its first argument");
+
+// text
+eq(evalFormula("=LEN('abcd')", [[""]], 5, 5), 4, "LEN");
+eq(evalFormula("=LEFT('abcd',2)", [[""]], 5, 5), "ab", "LEFT");
+eq(evalFormula("=RIGHT('abcd',2)", [[""]], 5, 5), "cd", "RIGHT");
+eq(evalFormula("=MID('abcd',2,2)", [[""]], 5, 5), "bc", "MID counts from 1, like Excel");
+eq(evalFormula("=TRIM('  a   b  ')", [[""]], 5, 5), "a b", "TRIM collapses runs of spaces");
+eq(evalFormula("=UPPER('ab')", [[""]], 5, 5), "AB", "UPPER");
+eq(evalFormula("=LOWER('AB')", [[""]], 5, 5), "ab", "LOWER");
+eq(evalFormula("=CONCAT('a',A2)", G, 5, 5), "a2", "CONCAT takes values and ranges");
+
+// lookups
+const LK = [["Widget", "10"], ["Gadget", "20"], ["Doohickey", "30"]];
+eq(evalFormula("=VLOOKUP('Gadget',A1:B3,2)", LK, 5, 5), 20, "VLOOKUP finds the row and reads across it");
+eq(evalFormula("=VLOOKUP('gadget',A1:B3,2)", LK, 5, 5), 20, "VLOOKUP matches case-insensitively, as Excel does");
+eq(errOf(() => evalFormula("=VLOOKUP('nope',A1:B3,2)", LK, 5, 5)), "#N/A", "VLOOKUP reports a miss as #N/A");
+eq(errOf(() => evalFormula("=VLOOKUP('Gadget',A1:B3,9)", LK, 5, 5)), "#REF!", "VLOOKUP past the range's last column is #REF!");
+eq(evalFormula("=MATCH('Doohickey',A1:A3)", LK, 5, 5), 3, "MATCH gives the position in the range");
+eq(evalFormula("=INDEX(A1:B3,2,2)", LK, 5, 5), 20, "INDEX reads by position");
+eq(evalFormula("=INDEX(B1:B3,MATCH('Widget',A1:A3))", LK, 5, 5), 10, "INDEX and MATCH compose");
+eq(errOf(() => evalFormula("=VLOOKUP('Widget',A1:B3,2)", LK, 1, 1)), "#CIRC!", "a lookup over its own cell is refused");
+
+// --- error taxonomy: each failure says which kind of wrong it is ---
+eq(errOf(() => evalFormula("=A1+1", [["text"]], 5, 5)), "#VALUE!", "text in arithmetic is #VALUE!");
+eq(errOf(() => evalFormula("=ABS('x')", [[""]], 5, 5)), "#VALUE!", "a text argument where a number belongs is #VALUE!");
+eq(errOf(() => evalFormula("=A1>1", [["text"]], 5, 5)), "#VALUE!", "comparing text to a number is #VALUE!");
+eq(errOf(() => evalFormula("=NOSUCHFN(1)", [[""]], 5, 5)), "#NAME?", "an unknown function is #NAME?");
+eq(errOf(() => evalFormula("=SUM(", [[""]], 5, 5)), "#NAME?", "unparseable input is #NAME?");
+eq(errOf(() => evalFormula("=1 2", [[""]], 5, 5)), "#NAME?", "trailing junk is #NAME?");
+eq(errOf(() => evalFormula("=Z9", [["1"]], 5, 5)), "#REF!", "a reference off the end of the table is #REF!");
+eq(errOf(() => evalFormula("=A1", [["1"]], 0, 0)), "#CIRC!", "a cell referring to itself is #CIRC!");
+eq(errOf(() => evalFormula("=SQRT(-1)", [[""]], 5, 5)), "#NUM!", "an impossible number is #NUM!");
+eq(errOf(() => evalFormula("=AVG(A1:A2)", [["x"], ["y"]], 5, 5)), "#DIV/0!", "averaging nothing is #DIV/0!");
+eq(errOf(() => evalFormula("=MEDIAN(A1:A2)", [["x"], ["y"]], 5, 5)), "#NUM!", "a median of nothing is #NUM!");
+
+// Excel returns a value, not an error, when an aggregate finds nothing to work on
+eq(evalFormula("=SUM(A1:A2)", [["x"], ["y"]], 5, 5), 0, "summing an empty column is 0, as in Excel");
+eq(evalFormula("=MIN(A1:A2)", [["x"], ["y"]], 5, 5), 0, "MIN of nothing is 0, as in Excel");
+eq(evalFormula("=MAX(A1:A2)", [["x"], ["y"]], 5, 5), 0, "MAX of nothing is 0, as in Excel");
+eq(evalFormula("=COUNT(A1:A2)", [["x"], ["y"]], 5, 5), 0, "COUNT of nothing is 0");
+eq(evalFormula("=IFERROR(NOSUCHFN(1),'caught')", [[""]], 5, 5), "caught", "IFERROR still catches a #NAME? underneath");
+
+// dates read off a cell
+eq(evalFormula("=YEAR(A1)", [["3/14/2012"]], 5, 5), 2012, "YEAR reads a date cell");
+eq(evalFormula("=MONTH(A1)", [["3/14/2012"]], 5, 5), 3, "MONTH");
+eq(evalFormula("=DAY(A1)", [["3/14/2012"]], 5, 5), 14, "DAY");
+ok(looksLikeFormula("=VLOOKUP('a',A1:B2,2)") && looksLikeFormula("=LEN(A2)"), "the new functions register as formulas");
+ok(!looksLikeFormula("=hello world"), "plain text still is not a formula");
+
+// --- the autocomplete list and the parser cannot drift apart ---
+ok(FORMULA_FUNCTIONS.length === 42, "every registered function name is offered for completion");
+ok(
+	FORMULA_FUNCTIONS.every((f, i) => i === 0 || FORMULA_FUNCTIONS[i - 1] <= f),
+	"the suggestion list is alphabetical"
+);
+// A name in the list with no implementation behind it parses and then dies as
+// #NAME?, which reads as a broken formula rather than a missing feature. Probe
+// each one with a spread of argument shapes: a real implementation answers at
+// least one of them with something other than #NAME?.
+const FN_SHAPES = ["A1:A3", "A1:A3,'>0'", "A1:B3,2,2", "'3/14/2012'", "'abcd',2,2", "1,1", "144", "A1:A3,B1:B3"];
+const FN_GRID = [["1", "2"], ["3", "4"], ["5", "6"]];
+const unimplemented = FORMULA_FUNCTIONS.filter((f) =>
+	FN_SHAPES.every((a) => errOf(() => evalFormula(`=${f}(${a})`, FN_GRID, 9, 9)) === "#NAME?")
+);
+eq(unimplemented.join(",") || "(none)", "(none)", "every suggested name reaches a real implementation");
+
+// what the formula bar offers while you type
+eq(completionsAt("=VL", 3).join(","), "VLOOKUP", "typing the start of a name suggests it");
+eq(completionsAt("=SUM", 4).join(","), "SUM,SUMIF,SUMPRODUCT", "a name that is also a prefix keeps its longer siblings");
+eq(completionsAt("=vlo", 4).join(","), "VLOOKUP", "matching ignores case");
+eq(completionsAt("=MEDIAN", 7).length, 0, "an exact and only match has nothing left to offer");
+eq(completionsAt("=A2+", 4).length, 0, "nothing is suggested where a name is not being typed");
+eq(completionsAt("plain text", 5).length, 0, "and never outside a formula");
+eq(completionsAt("=SUM(B2:B4)+AV", 14).join(","), "AVERAGE,AVERAGEIF,AVG", "the word at the caret is what counts, not the whole line");
+const comp = applyCompletion("=SUM(B2:B4)+AV", 14, "AVG");
+eq(comp.text, "=SUM(B2:B4)+AVG(", "accepting a suggestion writes the name and its open paren");
+eq(comp.caret, 16, "and leaves the caret inside the parentheses");
+const compMid = applyCompletion("=LE)", 3, "LEFT");
+eq(compMid.text, "=LEFT()", "text after the caret is kept");
+
+// where a cell click inserts a reference instead of retargeting
+ok(refInsertAllowed("=", 1), "right after the leading = a click points");
+ok(refInsertAllowed("=SUM(", 5), "and after an opening paren");
+ok(refInsertAllowed("=A2+", 4), "and after an operator");
+ok(refInsertAllowed("=SUM(A2,", 8), "and after a comma");
+ok(!refInsertAllowed("=A2", 3), "but not in the middle of a reference already typed");
+ok(!refInsertAllowed("plain", 5), "and not when the cell holds plain text");
+
 // --- planPrettify ---
 const PR = ["| A | Bee |", "| - | ---: |", "| xx | 1 |", `| <span class="ptb" style="color:#F00">y</span> | 22 |`, "| z |"];
 const pr = planPrettify(PR.slice(), { line: 2, col: 0, expect: null })!;
@@ -763,7 +1107,7 @@ eq(ferr, 2, "text arithmetic and short IF throw");
 ok(matchCriteria("**$150**", ">100"), "criteria sees through emphasis and currency");
 ok(looksLikeFormula("=IF(A1>1,'x','y')") && looksLikeFormula("=COUNTIF(A:A,'x')"), "detection knows the new functions");
 const SVF = ["| A | B |", "| - | - |", "| 5 | |"];
-const svf = planSetCellValue(SVF.slice(), { line: 2, col: 1, expect: null }, "=IF(A1>3, 'Big', 'Small')")!;
+const svf = planSetCellValue(SVF.slice(), { line: 2, col: 1, expect: null }, "=IF(A2>3, 'Big', 'Small')")!;
 ok(svf.edits[0].text.includes(">Big</span>"), "text formula result lands in the cell");
 
 // --- live rules ---

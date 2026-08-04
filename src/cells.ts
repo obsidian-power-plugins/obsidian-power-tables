@@ -166,7 +166,10 @@ export function buildCellContent(
 	rule: string | null = null,
 	tbl: string | null = null
 ): string {
-	const b = borders ? borders.replace(/[^tblrTBLR]/g, "") : "";
+	// edge letters, the weight markers "=~.", and a "#colour" suffix all have
+	// to survive the scrub; it exists to keep quotes and markup out, not to
+	// validate, which mergeBorders already did
+	const b = borders ? borders.replace(/[^a-zA-Z=~.#]/g, "") : "";
 	const width = w && /^\d{2,4}$/.test(w) ? w : null;
 	if (!bg && !fg && !calc && !formula && !b && !fmt && !width && !rule && !tbl) return inner;
 	// Keep the wrapper as short as possible, it is what users see as raw
@@ -570,7 +573,7 @@ export function recalcCalcs(lines: string[]): { line: number; text: string }[] {
 			const r = parseRow(work[i]);
 			if (!r || r.isDelim) continue;
 			let lineChanged = false;
-			let grid: { rows: string[][]; bodyStart: number } | null | undefined;
+			let grid: Grid | null | undefined;
 			for (let c = 0; c < r.cellCount; c++) {
 				const parsed = parseCellContent(r.pieces[c + 1]);
 				if (parsed.calc) {
@@ -592,9 +595,9 @@ export function recalcCalcs(lines: string[]): { line: number; text: string }[] {
 				if (!grid) continue;
 				let value = "#ERR";
 				try {
-					value = formatFormulaResult(evalFormula(formula, grid.rows, i - grid.bodyStart, c));
-				} catch {
-					value = "#ERR";
+					value = formatFormulaResult(evalFormula(formula, grid.rows, gridRowOf(grid, i), c));
+				} catch (e) {
+					value = formulaErrorText(e);
 				}
 				const st = styleLiveValue(work, i, c, parsed, value);
 				const emf = splitEmphasis(parsed.formula ? parsed.inner : "");
@@ -705,8 +708,17 @@ export function planSort(lines: string[], target: CellTargetLoc, dir: "asc" | "d
 		const lineNo = bodyStart + k;
 		if (lines[lineNo] !== r.text) edits.push({ line: lineNo, text: r.text });
 	});
+	// a sort is a permutation of the body rows: a formula that moved keeps
+	// pointing at the cells it pointed at, and a pinned total keeps covering the
+	// same block, because the block's ends permute within it
+	const hdr = gridRowOfLine(lines, start, bodyStart);
+	const map = Array.from({ length: hdr + rows.length }, (_, i) => i);
+	newOrder.forEach((r, k) => {
+		map[hdr + (r.idx - bodyStart)] = hdr + k;
+	});
+	const shifted = withRefShift(lines, edits, { start, end }, { axis: "row", kind: "permute", map });
 	const cursorLine = Math.min(Math.max(ln, bodyStart), end);
-	return { edits, cursorLine, cursorCh: cursorForCol(lines[cursorLine], col), rows: sortable.length };
+	return { edits: shifted, cursorLine, cursorCh: cursorForCol(lines[cursorLine], col), rows: sortable.length };
 }
 
 /** Swap the target's row with the one above/below (body rows only). */
@@ -736,7 +748,13 @@ export function planMoveRow(lines: string[], target: CellTargetLoc, delta: -1 | 
 		{ line: Math.min(ln, to), text: lines[Math.max(ln, to)] },
 		{ line: Math.max(ln, to), text: lines[Math.min(ln, to)] },
 	];
-	return { edits, cursorLine: to, cursorCh: cursorForCol(lines[ln], col) };
+	const map = Array.from({ length: gridRowOfLine(lines, start, end + 1) }, (_, i) => i);
+	const a = gridRowOfLine(lines, start, ln);
+	const b = gridRowOfLine(lines, start, to);
+	map[a] = b;
+	map[b] = a;
+	const shifted = withRefShift(lines, edits, { start, end }, { axis: "row", kind: "permute", map });
+	return { edits: shifted, cursorLine: to, cursorCh: cursorForCol(lines[ln], col) };
 }
 
 /** Swap the target's column with its neighbor across every row, delimiter included (alignment travels). */
@@ -764,8 +782,12 @@ export function planMoveColumn(lines: string[], target: CellTargetLoc, delta: -1
 		const text = r.prefix + r.pieces.join("|");
 		if (text !== lines[i]) edits.push({ line: i, text });
 	}
-	const lnText = edits.find((e) => e.line === ln)?.text ?? lines[ln];
-	return { edits, cursorLine: ln, cursorCh: cursorForCol(lnText, to) };
+	const map = Array.from({ length: Math.max(anchor.cellCount, col + 1, to + 1) }, (_, i) => i);
+	map[col] = to;
+	map[to] = col;
+	const shifted = withRefShift(lines, edits, { start, end }, { axis: "col", kind: "permute", map });
+	const lnText = shifted.find((e) => e.line === ln)?.text ?? lines[ln];
+	return { edits: shifted, cursorLine: ln, cursorCh: cursorForCol(lnText, to) };
 }
 
 /* ---------------- text styling, alignment, number formats ---------------- */
@@ -1245,7 +1267,7 @@ export function planMulti(
 /* ---------------- sticky formats (auto-reapplied row/column formats) ---------------- */
 
 const NEG_STYLES: NegStyle[] = ["minus", "red", "paren", "redparen"];
-const FMT_DEFAULTS: Omit<FmtSpec, "kind"> = {
+export const FMT_DEFAULTS: Omit<FmtSpec, "kind"> = {
 	decimals: 2,
 	thousands: true,
 	negative: "minus",
@@ -1406,23 +1428,108 @@ export function applyStickyFormats(lines: string[], skip?: { line: number; col: 
 
 /* ---------------- cell borders ---------------- */
 
-export type BorderAction = "top" | "bottom" | "left" | "right" | "none" | "all" | "outside" | "thickoutside";
+export type BorderAction =
+	| "top"
+	| "bottom"
+	| "left"
+	| "right"
+	| "none"
+	| "all"
+	| "outside"
+	| "thickoutside"
+	/* Excel's stacked presets, compositions of the edges above */
+	| "thickbottom"
+	| "doublebottom"
+	| "topbottom"
+	| "topthickbottom"
+	| "topdoublebottom";
 
-type Edge = "top" | "bottom" | "left" | "right";
+export type Edge = "top" | "bottom" | "left" | "right";
+/** What an edge is drawn with. Thin and thick were the original two; the rest
+ *  are Excel's, and each needed a marker of its own in the stored string. */
+export type EdgeWeight = "thin" | "thick" | "double" | "dashed" | "dotted";
+/** Marker written before an edge's letter. Thin has none and thick is the
+ *  letter in uppercase, which is how the original two were stored. */
+const WEIGHT_MARK: Record<EdgeWeight, string> = {
+	thin: "",
+	thick: "",
+	double: "=",
+	dashed: "~",
+	dotted: ".",
+};
+const MARK_WEIGHT: Record<string, EdgeWeight> = { "=": "double", "~": "dashed", ".": "dotted" };
+
+/** The pen colours Draw Borders offers. Names rather than hex, because the
+ *  edges are painted by CSS off the attribute and CSS cannot read an arbitrary
+ *  value out of one; a fixed set keeps the note portable and readable. */
+export const BORDER_COLORS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"] as const;
+export type BorderColor = (typeof BORDER_COLORS)[number];
+
+/** Split a border string into its edges and its optional "#colour" suffix. */
+export function splitBorders(s: string | null): { edges: string; color: BorderColor | null } {
+	if (!s) return { edges: "", color: null };
+	const at = s.indexOf("#");
+	if (at < 0) return { edges: s, color: null };
+	const name = s.slice(at + 1);
+	return {
+		edges: s.slice(0, at),
+		color: (BORDER_COLORS as readonly string[]).includes(name) ? (name as BorderColor) : null,
+	};
+}
 const EDGE_CHARS: Record<Edge, string> = { top: "t", bottom: "b", left: "l", right: "r" };
 
-/** Merge edges into a border string ("tblr", uppercase = thick); an explicit
- *  set replaces that edge's weight. Canonical order t, b, l, r. */
-export function mergeBorders(existing: string | null, add: { edge: Edge; thick: boolean }[]): string | null {
-	const state = new Map<string, boolean>();
-	for (const ch of existing ?? "") {
+/** The stacked presets, as the edges and weights they stand for. */
+const STACKED: Partial<Record<BorderAction, { top?: EdgeWeight; bottom?: EdgeWeight }>> = {
+	thickbottom: { bottom: "thick" },
+	doublebottom: { bottom: "double" },
+	topbottom: { top: "thin", bottom: "thin" },
+	topthickbottom: { top: "thin", bottom: "thick" },
+	topdoublebottom: { top: "thin", bottom: "double" },
+};
+
+/**
+ * Merge edges into a border string. One letter per edge in canonical order
+ * t, b, l, r: lowercase thin, uppercase thick, and "=" ahead of the letter for
+ * double, so "t=b" is a thin top over a double bottom.
+ *
+ * The "=" prefix rather than a new letter is deliberate: "=b" still contains
+ * "b", so the CSS that paints a bottom edge keeps matching and the double rule
+ * only overrides its style and width. Strings written by older versions parse
+ * unchanged.
+ */
+export function mergeBorders(
+	existing: string | null,
+	add: { edge: Edge; weight: EdgeWeight }[],
+	color?: BorderColor | null
+): string | null {
+	const prev = splitBorders(existing);
+	const state = new Map<string, EdgeWeight>();
+	const s = prev.edges;
+	for (let i = 0; i < s.length; i++) {
+		const ch = s[i];
+		const marked = MARK_WEIGHT[ch];
+		if (marked) {
+			const next = s[i + 1]?.toLowerCase();
+			if (next && "tblr".includes(next)) {
+				state.set(next, marked);
+				i++;
+			}
+			continue;
+		}
 		const lower = ch.toLowerCase();
-		if ("tblr".includes(lower)) state.set(lower, state.get(lower) || ch !== lower);
+		if ("tblr".includes(lower)) state.set(lower, ch === lower ? "thin" : "thick");
 	}
-	for (const a of add) state.set(EDGE_CHARS[a.edge], a.thick);
+	for (const a of add) state.set(EDGE_CHARS[a.edge], a.weight);
 	let out = "";
-	for (const c of ["t", "b", "l", "r"]) if (state.has(c)) out += state.get(c) ? c.toUpperCase() : c;
-	return out || null;
+	for (const c of ["t", "b", "l", "r"]) {
+		const w = state.get(c);
+		if (!w) continue;
+		out += w === "thick" ? c.toUpperCase() : WEIGHT_MARK[w] + c;
+	}
+	if (!out) return null;
+	// undefined leaves the colour as it was; null clears it back to default
+	const keep = color === undefined ? prev.color : color;
+	return keep ? `${out}#${keep}` : out;
 }
 
 /**
@@ -1467,17 +1574,27 @@ export function planBorders(lines: string[], target: CellTargetLoc, action: Bord
 			if (action === "none") nb = null;
 			else if (action === "all") nb = "tblr";
 			else if (action === "outside" || action === "thickoutside") {
-				const thick = action === "thickoutside";
-				const adds: { edge: Edge; thick: boolean }[] = [];
-				if (firstRow) adds.push({ edge: "top", thick });
-				if (lastRow) adds.push({ edge: "bottom", thick });
-				if (firstCol) adds.push({ edge: "left", thick });
-				if (lastCol) adds.push({ edge: "right", thick });
+				const weight: EdgeWeight = action === "thickoutside" ? "thick" : "thin";
+				const adds: { edge: Edge; weight: EdgeWeight }[] = [];
+				if (firstRow) adds.push({ edge: "top", weight });
+				if (lastRow) adds.push({ edge: "bottom", weight });
+				if (firstCol) adds.push({ edge: "left", weight });
+				if (lastCol) adds.push({ edge: "right", weight });
+				nb = adds.length ? mergeBorders(parsed.borders, adds) : parsed.borders;
+			} else if (STACKED[action]) {
+				// a top and/or a bottom on the selection's outer rows, each with
+				// its own weight
+				const spec = STACKED[action]!;
+				const adds: { edge: Edge; weight: EdgeWeight }[] = [];
+				if (spec.top && firstRow) adds.push({ edge: "top", weight: spec.top });
+				if (spec.bottom && lastRow) adds.push({ edge: "bottom", weight: spec.bottom });
 				nb = adds.length ? mergeBorders(parsed.borders, adds) : parsed.borders;
 			} else {
 				const onSide =
 					action === "top" ? firstRow : action === "bottom" ? lastRow : action === "left" ? firstCol : lastCol;
-				nb = onSide ? mergeBorders(parsed.borders, [{ edge: action, thick: false }]) : parsed.borders;
+				nb = onSide
+					? mergeBorders(parsed.borders, [{ edge: action as Edge, weight: "thin" }])
+					: parsed.borders;
 			}
 			const next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, nb, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
 			if (next !== r.pieces[c + 1]) {
@@ -1489,6 +1606,60 @@ export function planBorders(lines: string[], target: CellTargetLoc, action: Bord
 	}
 	const lnText = edits.find((e) => e.line === ln)?.text ?? lines[ln];
 	return { edits, cursorLine: ln, cursorCh: cursorForCol(lnText, col) };
+}
+
+/**
+ * The pen behind Draw Borders. Where planBorders reasons about a scope and
+ * works out which cells sit on which side of it, this takes the cells and edges
+ * the pointer actually touched and does exactly that, once, for the whole
+ * stroke: a drag is one edit rather than one per cell.
+ */
+export function planDrawBorders(
+	lines: string[],
+	strokes: { line: number; col: number; edge?: Edge }[],
+	pen: { tool: "border" | "grid" | "erase"; weight: EdgeWeight; color: BorderColor | null }
+): EditPlan | null {
+	if (!strokes.length) return null;
+	// gather by line so a row is parsed and rewritten once however many of its
+	// cells the stroke crossed
+	const byLine = new Map<number, { line: number; col: number; edge?: Edge }[]>();
+	for (const s of strokes) {
+		const list = byLine.get(s.line) ?? [];
+		list.push(s);
+		byLine.set(s.line, list);
+	}
+	const edits: { line: number; text: string }[] = [];
+	for (const [li, hits] of byLine) {
+		const r = parseRow(lines[li]);
+		if (!r || r.isDelim) continue;
+		let changed = false;
+		for (const hit of hits) {
+			const c = hit.col;
+			if (c < 0 || c >= r.cellCount) continue;
+			const parsed = parseCellContent(r.pieces[c + 1]);
+			let nb: string | null;
+			if (pen.tool === "erase") nb = null;
+			else if (pen.tool === "grid") {
+				nb = mergeBorders(
+					parsed.borders,
+					(["top", "bottom", "left", "right"] as Edge[]).map((edge) => ({ edge, weight: pen.weight })),
+					pen.color
+				);
+			} else {
+				if (!hit.edge) continue;
+				nb = mergeBorders(parsed.borders, [{ edge: hit.edge, weight: pen.weight }], pen.color);
+			}
+			const next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, nb, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+			if (next !== r.pieces[c + 1]) {
+				r.pieces[c + 1] = next;
+				changed = true;
+			}
+		}
+		if (changed) edits.push({ line: li, text: r.prefix + r.pieces.join("|") });
+	}
+	if (!edits.length) return null;
+	const first = strokes[0];
+	return { edits, cursorLine: first.line, cursorCh: 0 };
 }
 
 /* ---------------- structure: insert/delete/duplicate rows & columns ---------------- */
@@ -1517,12 +1688,17 @@ export function planInsertRow(lines: string[], target: CellTargetLoc, where: "ab
 	if (ln == null) return null;
 	const r = parseRow(lines[ln]);
 	if (!r) return null;
-	const { delimIdx } = tableBounds(lines, ln);
+	const { start, end, delimIdx } = tableBounds(lines, ln);
 	// header target: new rows always go just below the delimiter
 	let at = where === "above" ? ln : ln + 1;
 	if (delimIdx >= 0 && at <= delimIdx) at = delimIdx + 1;
 	const text = emptyRow(r.prefix, r.cellCount);
-	return { edits: [{ line: at, text, kind: "insert" }], cursorLine: at, cursorCh: cursorForCol(text, Math.min(target.col, r.cellCount - 1)) };
+	const edits = withRefShift(lines, [{ line: at, text, kind: "insert" }], { start, end }, {
+		axis: "row",
+		kind: "insert",
+		at: gridRowOfLine(lines, start, at),
+	});
+	return { edits, cursorLine: at, cursorCh: cursorForCol(text, Math.min(target.col, r.cellCount - 1)) };
 }
 
 /** Append a live totals row: "Total" under the first column and a live column
@@ -1570,9 +1746,14 @@ export function planDeleteRow(lines: string[], target: CellTargetLoc): EditPlan 
 	if (ln == null) return null;
 	const r = parseRow(lines[ln]);
 	if (!r || r.isDelim) return null;
-	const { delimIdx } = tableBounds(lines, ln);
+	const { start, end, delimIdx } = tableBounds(lines, ln);
 	if (delimIdx >= 0 && ln < delimIdx) return { edits: [], cursorLine: ln, cursorCh: 0 };
-	return { edits: [{ line: ln, text: "", kind: "delete" }], cursorLine: Math.max(0, ln - 1), cursorCh: 2 };
+	const edits = withRefShift(lines, [{ line: ln, text: "", kind: "delete" }], { start, end }, {
+		axis: "row",
+		kind: "delete",
+		at: gridRowOfLine(lines, start, ln),
+	});
+	return { edits, cursorLine: Math.max(0, ln - 1), cursorCh: 2 };
 }
 
 export function planDuplicateRow(lines: string[], target: CellTargetLoc): EditPlan | null {
@@ -1580,10 +1761,20 @@ export function planDuplicateRow(lines: string[], target: CellTargetLoc): EditPl
 	if (ln == null) return null;
 	const r = parseRow(lines[ln]);
 	if (!r || r.isDelim) return null;
+	const { start, end } = tableBounds(lines, ln);
+	// the copy lands one row down, so its own refs move one row down with it:
+	// that is the relative rule, and it is why the copy is shifted by offset
+	// while every other row is shifted by the insert.
+	const copy = shiftRowFormulas(lines[ln], { axis: "row", kind: "offset", delta: 1 });
+	const edits = withRefShift(lines, [{ line: ln + 1, text: copy, kind: "insert" }], { start, end }, {
+		axis: "row",
+		kind: "insert",
+		at: gridRowOfLine(lines, start, ln + 1),
+	});
 	return {
-		edits: [{ line: ln + 1, text: lines[ln], kind: "insert" }],
+		edits,
 		cursorLine: ln + 1,
-		cursorCh: cursorForCol(lines[ln], Math.min(target.col, r.cellCount - 1)),
+		cursorCh: cursorForCol(copy, Math.min(target.col, r.cellCount - 1)),
 	};
 }
 
@@ -1603,8 +1794,9 @@ export function planInsertColumn(lines: string[], target: CellTargetLoc, where: 
 		r.pieces.splice(at + 1, 0, r.isDelim ? " --- " : "   ");
 		edits.push({ line: i, text: r.prefix + r.pieces.join("|") });
 	}
-	const lnText = edits.find((e) => e.line === ln)?.text ?? lines[ln];
-	return { edits, cursorLine: ln, cursorCh: cursorForCol(lnText, to) };
+	const shifted = withRefShift(lines, edits, { start, end }, { axis: "col", kind: "insert", at: to });
+	const lnText = shifted.find((e) => e.line === ln)?.text ?? lines[ln];
+	return { edits: shifted, cursorLine: ln, cursorCh: cursorForCol(lnText, to) };
 }
 
 export function planDeleteColumn(lines: string[], target: CellTargetLoc): EditPlan | null {
@@ -1621,8 +1813,9 @@ export function planDeleteColumn(lines: string[], target: CellTargetLoc): EditPl
 		r.pieces.splice(col + 1, 1);
 		edits.push({ line: i, text: r.prefix + r.pieces.join("|") });
 	}
-	const lnText = edits.find((e) => e.line === ln)?.text ?? lines[ln];
-	return { edits, cursorLine: ln, cursorCh: cursorForCol(lnText, Math.max(0, col - 1)) };
+	const shifted = withRefShift(lines, edits, { start, end }, { axis: "col", kind: "delete", at: col });
+	const lnText = shifted.find((e) => e.line === ln)?.text ?? lines[ln];
+	return { edits: shifted, cursorLine: ln, cursorCh: cursorForCol(lnText, Math.max(0, col - 1)) };
 }
 
 /** Clear cell values (keeps colors, drops live-calc markers). */
@@ -1745,17 +1938,34 @@ export function planImportRows(
 
 /* ---------------- formulas: =SUM(C1:C4), =C1*1.08 ---------------- */
 
-/** Body-row cell texts for the table containing line `ln` (header excluded). */
-export function tableGrid(lines: string[], ln: number): { rows: string[][]; bodyStart: number } | null {
-	const { end, delimIdx } = tableBounds(lines, ln);
+/** A table's cell texts, header row included, with the source line each row
+ *  came from. Delimiter lines are not rows and appear in neither array. */
+export type Grid = { rows: string[][]; lineNos: number[] };
+
+/**
+ * Cell texts for the table containing line `ln`, header row included as row 0.
+ * That is what makes refs Excel-literal: A1 is column A's header cell and A2 is
+ * its first data row, so the numbers in a formula match the numbers in the
+ * gutter and match what the same table would be in a spreadsheet.
+ */
+export function tableGrid(lines: string[], ln: number): Grid | null {
+	const { start, end, delimIdx } = tableBounds(lines, ln);
 	if (delimIdx < 0) return null;
 	const rows: string[][] = [];
-	for (let i = delimIdx + 1; i <= end; i++) {
+	const lineNos: number[] = [];
+	for (let i = start; i <= end; i++) {
 		const r = parseRow(lines[i]);
 		if (!r || r.isDelim) continue;
 		rows.push(Array.from({ length: r.cellCount }, (_, c) => parseCellContent(r.pieces[c + 1]).inner));
+		lineNos.push(i);
 	}
-	return { rows, bodyStart: delimIdx + 1 };
+	return { rows, lineNos };
+}
+
+/** The grid row index of a source line, or -1 when that line is not a row of
+ *  this table (a delimiter, or outside it). Row 0 is the header. */
+export function gridRowOf(g: Grid, line: number): number {
+	return g.lineNos.indexOf(line);
 }
 
 function colIndexOf(letters: string): number {
@@ -1773,19 +1983,310 @@ export function colLetterOf(n: number): string {
 	return s;
 }
 
+/* Reference syntax, shared by the evaluator's tokenizer and the structural
+   rewriter below so the two can never drift apart. A leading $ anchors a
+   coordinate: Excel ignores it when resolving which cell you meant, and honors
+   it only when a formula is copied, which is exactly the offset op's rule. */
+const RE_RANGE = /^(\$?)([A-Za-z]{1,2})(\$?)(\d+):(\$?)([A-Za-z]{1,2})(\$?)(\d+)/;
+const RE_COLRANGE = /^(\$?)([A-Za-z]{1,2}):(\$?)([A-Za-z]{1,2})(?!\$?\d)/;
+const RE_ROWRANGE = /^(\$?)(\d+):(\$?)(\d+)(?![\d.])/;
+const RE_REF = /^(\$?)([A-Za-z]{1,2})(\$?)(\d+)/;
+
+/* Function names, longest first where one is a prefix of another so SUM cannot
+   swallow SUMPRODUCT. One source of truth: the tokenizer matches calls with it
+   and looksLikeFormula decides with it, so adding a function here is the whole
+   registration. */
+const FN_NAMES =
+	"SUMPRODUCT|SUMIF|SUM|COUNTBLANK|COUNTIF|COUNTA|COUNT|AVERAGEIF|AVERAGE|AVG|MEDIAN|PRODUCT|POWER|SQRT|STDEV|INT|MOD|" +
+	"ROUNDUP|ROUNDDOWN|ROUND|MIN|MAX|IFERROR|IF|AND|OR|NOT|ABS|LEN|LEFT|RIGHT|MID|TRIM|UPPER|LOWER|CONCAT|" +
+	"VLOOKUP|MATCH|INDEX|YEAR|MONTH|DAY";
+const RE_FN = new RegExp(`^(${FN_NAMES})\\s*\\(`, "i");
+
+/** Every function the parser knows, alphabetical, for the formula bar's
+ *  autocomplete. Same source as the tokenizer, so the list can never offer a
+ *  name the parser would then reject. */
+export const FORMULA_FUNCTIONS: readonly string[] = FN_NAMES.split("|").sort();
+
+/**
+ * Function names worth offering for the word being typed at `caret`. Empty
+ * unless the text is a formula, the caret sits at the end of a bare word, and
+ * that word still has somewhere to go: once the only match is what you already
+ * typed there is nothing left to suggest.
+ */
+export function completionsAt(text: string, caret: number, limit = 8): string[] {
+	if (!text.startsWith("=")) return [];
+	const word = /([A-Za-z]+)$/.exec(text.slice(0, caret))?.[1];
+	if (!word) return [];
+	const upper = word.toUpperCase();
+	const hits = FORMULA_FUNCTIONS.filter((f) => f.startsWith(upper));
+	if (hits.length === 1 && hits[0] === upper) return [];
+	return hits.slice(0, limit);
+}
+
+/** Replace the word at `caret` with a chosen function name and its open paren,
+ *  leaving the caret inside the parentheses ready for arguments. */
+export function applyCompletion(text: string, caret: number, name: string): { text: string; caret: number } {
+	const word = /([A-Za-z]+)$/.exec(text.slice(0, caret))?.[1] ?? "";
+	const head = text.slice(0, caret - word.length);
+	return { text: `${head}${name}(${text.slice(caret)}`, caret: head.length + name.length + 1 };
+}
+
+/**
+ * Whether a cell click at this caret should insert a reference rather than
+ * retarget. True only where a reference could actually go: right after the
+ * leading =, an operator, an opening paren, or a comma. Anywhere else a click
+ * means "work on that cell instead", so point mode stays out of the way.
+ */
+export function refInsertAllowed(text: string, caret: number): boolean {
+	if (!text.startsWith("=")) return false;
+	return /[=+\-*/^&(,:<>%]\s*$/.test(text.slice(0, caret));
+}
+
+/* ---------------- structural reference rewriting ----------------
+   Inserting, deleting, moving, or sorting rows and columns moves the cells a
+   formula points at. Excel rewrites the references so the formula keeps meaning
+   what it meant; without that, a stored ref silently addresses whatever landed
+   in that slot, which reads as a plausible wrong number rather than an error.
+   Coordinates here are the 0-based grid ones tableGrid uses (row 0 is the
+   header, column 0 is A). Formula text is 1-based on rows and lettered on
+   columns, so the rewriter converts at the edges. */
+
+/** What happened to one axis. */
+export type RefOp =
+	/** A line appeared at `at`; everything from there on moves down/right one. */
+	| { axis: "row" | "col"; kind: "insert"; at: number }
+	/** The line at `at` went away. Refs to it die; later ones move back one. */
+	| { axis: "row" | "col"; kind: "delete"; at: number }
+	/** A reorder (move, sort): map[oldIndex] = newIndex. A range takes the
+	 *  min/max of its permuted ends, so a block that was sorted as a unit keeps
+	 *  covering that block. */
+	| { axis: "row" | "col"; kind: "permute"; map: number[] }
+	/** The relative-reference rule a copied formula follows: every ref moves by
+	 *  the same distance the formula itself moved, so it keeps pointing the same
+	 *  way relative to its own cell. */
+	| { axis: "row" | "col"; kind: "offset"; delta: number };
+
+/** What a reference becomes when the cell it named no longer exists. */
+export const REF_DEAD = "#REF!";
+
+/* Excel's error values. A formula that fails should say which kind of wrong it
+   is, because each one points somewhere different: #VALUE! at an argument,
+   #NAME? at what you typed, #REF! at something deleted, #N/A at a lookup that
+   found nothing. #CIRC! is the one code Excel does not have: it warns in a
+   dialog and leaves the cell reading 0, which we cannot do from here, and a
+   silent 0 is the failure mode this plugin is least willing to ship. */
+const ERR_VALUE = "#VALUE!";
+const ERR_NAME = "#NAME?";
+const ERR_DIV0 = "#DIV/0!";
+const ERR_NA = "#N/A";
+const ERR_NUM = "#NUM!";
+const ERR_CIRC = "#CIRC!";
+
+/** What a failed formula shows in its cell. A named error carries its own text,
+ *  so a dead reference reads as #REF! and says what to go fix; anything else
+ *  falls back to the generic one. */
+export function formulaErrorText(e: unknown): string {
+	const msg = e instanceof Error ? e.message : "";
+	return msg.startsWith("#") ? msg : "#ERR";
+}
+
+/** `anchored` is a $ on this coordinate. It holds a copied formula still, and
+ *  nothing else: a structural move relocates the cell itself, so an anchored
+ *  ref tracks it the same as a relative one, exactly as Excel behaves. */
+function moveCoord(v: number, op: RefOp, anchored: boolean): number | null {
+	switch (op.kind) {
+		case "insert":
+			return v >= op.at ? v + 1 : v;
+		case "delete":
+			return v === op.at ? null : v > op.at ? v - 1 : v;
+		case "offset":
+			return anchored ? v : v + op.delta;
+		case "permute":
+			return op.map[v] ?? v;
+	}
+}
+
+/** Both ends of a range. A delete inside it shrinks it rather than killing it;
+ *  only deleting the whole span leaves nothing to point at. */
+function moveSpan(a: number, b: number, anchorA: boolean, anchorB: boolean, op: RefOp): [number, number] | null {
+	if (op.kind === "delete") {
+		const lo = Math.min(a, b);
+		const hi = Math.max(a, b);
+		const nlo = lo > op.at ? lo - 1 : lo;
+		const nhi = hi >= op.at ? hi - 1 : hi;
+		return nhi < nlo ? null : [nlo, nhi];
+	}
+	const na = moveCoord(a, op, anchorA);
+	const nb = moveCoord(b, op, anchorB);
+	if (na == null || nb == null) return null;
+	return na <= nb ? [na, nb] : [nb, na];
+}
+
+/**
+ * Rewrite every reference in one formula for a structural change. String
+ * literals are copied through untouched, and an already-dead #REF! stays dead.
+ */
+export function shiftFormulaRefs(src: string, op: RefOp): string {
+	const cell = (ca: string, c: number, ra: string, r: number) => `${ca}${colLetterOf(c)}${ra}${r + 1}`;
+	let out = "";
+	let i = 0;
+	while (i < src.length) {
+		const ch = src[i];
+		if (ch === "'" || ch === '"') {
+			const close = src.indexOf(ch, i + 1);
+			if (close < 0) {
+				out += src.slice(i);
+				break;
+			}
+			out += src.slice(i, close + 1);
+			i = close + 1;
+			continue;
+		}
+		if (src.startsWith(REF_DEAD, i)) {
+			out += REF_DEAD;
+			i += REF_DEAD.length;
+			continue;
+		}
+		const rest = src.slice(i);
+		const range = RE_RANGE.exec(rest);
+		if (range) {
+			const [, ac1, l1, ar1, d1, ac2, l2, ar2, d2] = range;
+			const c1 = colIndexOf(l1);
+			const c2 = colIndexOf(l2);
+			const r1 = +d1 - 1;
+			const r2 = +d2 - 1;
+			const span =
+				op.axis === "row" ? moveSpan(r1, r2, !!ar1, !!ar2, op) : moveSpan(c1, c2, !!ac1, !!ac2, op);
+			out +=
+				span == null
+					? REF_DEAD
+					: op.axis === "row"
+						? `${cell(ac1, c1, ar1, span[0])}:${cell(ac2, c2, ar2, span[1])}`
+						: `${cell(ac1, span[0], ar1, r1)}:${cell(ac2, span[1], ar2, r2)}`;
+			i += range[0].length;
+			continue;
+		}
+		const colRange = RE_COLRANGE.exec(rest);
+		if (colRange) {
+			const [, a1, l1, a2, l2] = colRange;
+			if (op.axis === "col") {
+				const span = moveSpan(colIndexOf(l1), colIndexOf(l2), !!a1, !!a2, op);
+				out += span == null ? REF_DEAD : `${a1}${colLetterOf(span[0])}:${a2}${colLetterOf(span[1])}`;
+			} else {
+				out += colRange[0];
+			}
+			i += colRange[0].length;
+			continue;
+		}
+		const rowRange = RE_ROWRANGE.exec(rest);
+		if (rowRange) {
+			const [, a1, d1, a2, d2] = rowRange;
+			if (op.axis === "row") {
+				const span = moveSpan(+d1 - 1, +d2 - 1, !!a1, !!a2, op);
+				out += span == null ? REF_DEAD : `${a1}${span[0] + 1}:${a2}${span[1] + 1}`;
+			} else {
+				out += rowRange[0];
+			}
+			i += rowRange[0].length;
+			continue;
+		}
+		const ref = RE_REF.exec(rest);
+		if (ref) {
+			const [, ac, letters, ar, digits] = ref;
+			const c = colIndexOf(letters);
+			const r = +digits - 1;
+			if (op.axis === "row") {
+				const nr = moveCoord(r, op, !!ar);
+				out += nr == null ? REF_DEAD : cell(ac, c, ar, nr);
+			} else {
+				const nc = moveCoord(c, op, !!ac);
+				out += nc == null ? REF_DEAD : cell(ac, nc, ar, r);
+			}
+			i += ref[0].length;
+			continue;
+		}
+		out += ch;
+		i++;
+	}
+	return out;
+}
+
+/** Rewrite every formula in one table line. Displayed values are left alone;
+ *  the recalc pass that follows any edit refreshes them. */
+export function shiftRowFormulas(text: string, op: RefOp): string {
+	const r = parseRow(text);
+	if (!r || r.isDelim) return text;
+	let changed = false;
+	for (let c = 0; c < r.cellCount; c++) {
+		const p = parseCellContent(r.pieces[c + 1]);
+		// a stored formula keeps its value; a plain "=…" cell is its own formula
+		const src = p.formula ?? (looksLikeFormula(p.inner) ? p.inner : null);
+		if (!src) continue;
+		const next = shiftFormulaRefs(src, op);
+		if (next === src) continue;
+		r.pieces[c + 1] = p.formula
+			? ` ${buildCellContent(p.inner, p.bg, p.fg, null, next, p.borders, p.fmt, p.hl, p.w, p.rule, p.tbl)} `
+			: ` ${buildCellContent(next, p.bg, p.fg, p.calc, null, p.borders, p.fmt, p.hl, p.w, p.rule, p.tbl)} `;
+		changed = true;
+	}
+	return changed ? r.prefix + r.pieces.join("|") : text;
+}
+
+/**
+ * Fold reference rewriting into a plan's edits. Lines the plan already rewrites
+ * get their formulas shifted in the plan's own text; every other line of the
+ * table gets an edit only if its formulas actually moved. Line numbers stay in
+ * original-document space, which is what both appliers expect, and an insert
+ * sorts ahead of an edit on the same line so the two never overlap.
+ *
+ * Inserted lines are left alone: the op describes what happens to content that
+ * was already there, and brand new content is the planner's to write. A planner
+ * inserting a copy of an existing row shifts that copy itself, by the offset
+ * rule rather than this one.
+ */
+export function withRefShift(
+	lines: string[],
+	edits: { line: number; text: string; kind?: EditKind }[],
+	bounds: { start: number; end: number },
+	op: RefOp
+): { line: number; text: string; kind?: EditKind }[] {
+	const out = edits.map((e) => (e.kind ? e : { ...e, text: shiftRowFormulas(e.text, op) }));
+	const covered = new Set(out.filter((e) => e.kind !== "insert").map((e) => e.line));
+	for (let i = bounds.start; i <= bounds.end; i++) {
+		if (covered.has(i) || i >= lines.length) continue;
+		const next = shiftRowFormulas(lines[i], op);
+		if (next !== lines[i]) out.push({ line: i, text: next });
+	}
+	return out.sort((a, b) => a.line - b.line || (a.kind === "insert" ? -1 : b.kind === "insert" ? 1 : 0));
+}
+
+/** The grid row a source line sits at, without building the whole grid. Used by
+ *  the structural planners, which know their table's bounds already. */
+export function gridRowOfLine(lines: string[], start: number, line: number): number {
+	let n = 0;
+	for (let i = start; i < line; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) n++;
+	}
+	return n;
+}
+
 /**
  * The formula equivalent of a live calc marker, for the formula bar: a column
- * calc at column B reads =SUM(B:B), a row calc on data row 3 reads =SUM(3:3).
- * Committing that text back produces a formula cell with identical behavior
- * (whole-column/row ranges re-expand every recalc and exclude the cell itself).
+ * calc at column B reads =SUM(B:B), a row calc on row 3 reads =SUM(3:3), where
+ * row 1 is the header. Committing that text back produces a formula cell with
+ * the same behavior (whole-column/row ranges re-expand every recalc and exclude
+ * the cell itself), with one edge: a live column calc covers the data rows,
+ * while B:B is the whole column Excel-style. Only a header holding a number
+ * tells them apart, since text never reaches a numeric aggregate.
  */
-export function calcToFormula(calc: CalcSpec, col: number, bodyRow: number): string {
+export function calcToFormula(calc: CalcSpec, col: number, row: number): string {
 	const fn = calc.fn.toUpperCase();
 	if (calc.dir === "column") {
 		const L = colLetterOf(col);
 		return `=${fn}(${L}:${L})`;
 	}
-	return `=${fn}(${bodyRow}:${bodyRow})`;
+	return `=${fn}(${row}:${row})`;
 }
 
 type FTok =
@@ -1799,7 +2300,10 @@ type FTok =
 	| { t: "rowrange"; r1: number; r2: number }
 	| { t: "lp" }
 	| { t: "rp" }
-	| { t: "comma" };
+	| { t: "comma" }
+	/** An error the tokenizer saw coming but left for evaluation time, so that
+	 *  an IFERROR wrapped around it gets its chance first. */
+	| { t: "err"; v: string };
 
 /** A formula value: numbers for math, text for IF results and comparisons. */
 export type FVal = number | string;
@@ -1819,7 +2323,7 @@ function tokenizeFormula(src: string): FTok[] {
 			i += 2;
 			continue;
 		}
-		if ("+-*/><=".includes(ch)) {
+		if ("+-*/><=^&%".includes(ch)) {
 			out.push({ t: "op", v: ch });
 			i++;
 			continue;
@@ -1827,7 +2331,7 @@ function tokenizeFormula(src: string): FTok[] {
 		// string literal: 'text' or "text" (data-f storage converts " to ')
 		if (ch === "'" || ch === '"') {
 			const close = src.indexOf(ch, i + 1);
-			if (close < 0) throw new Error("unterminated string");
+			if (close < 0) throw new Error(ERR_NAME);
 			out.push({ t: "str", v: src.slice(i + 1, close) });
 			i = close + 1;
 			continue;
@@ -1847,54 +2351,114 @@ function tokenizeFormula(src: string): FTok[] {
 			i++;
 			continue;
 		}
+		// Excel-style whole-row range: 3:3 (all columns of row 3, where row 1 is
+		// the header). Checked before plain numbers so "3:3" is not read as 3,
+		// and outside the digit branch so "$3:$3" is reached at all.
+		const rr = RE_ROWRANGE.exec(src.slice(i));
+		if (rr) {
+			out.push({ t: "rowrange", r1: +rr[2] - 1, r2: +rr[4] - 1 });
+			i += rr[0].length;
+			continue;
+		}
 		if (/\d/.test(ch)) {
-			// Excel-style whole-row range: 3:3 (all columns of data row 3)
-			const rr = /^(\d+):(\d+)(?![\d.])/.exec(src.slice(i));
-			if (rr) {
-				out.push({ t: "rowrange", r1: +rr[1] - 1, r2: +rr[2] - 1 });
-				i += rr[0].length;
-				continue;
-			}
 			const m = /^\d+(\.\d+)?/.exec(src.slice(i))!;
 			out.push({ t: "num", v: parseFloat(m[0]) });
 			i += m[0].length;
 			continue;
 		}
-		const fn = /^(SUMIF|COUNTIF|SUM|AVERAGE|AVG|MIN|MAX|COUNT|IF|ROUND|ABS)\s*\(/i.exec(src.slice(i));
+		const fn = RE_FN.exec(src.slice(i));
 		if (fn) {
 			out.push({ t: "fn", v: fn[1].toUpperCase() === "AVERAGE" ? "AVG" : fn[1].toUpperCase() });
 			out.push({ t: "lp" });
 			i += fn[0].length;
 			continue;
 		}
-		const range = /^([A-Za-z]{1,2})(\d+):([A-Za-z]{1,2})(\d+)/.exec(src.slice(i));
+		const range = RE_RANGE.exec(src.slice(i));
 		if (range) {
 			out.push({
 				t: "range",
-				c1: colIndexOf(range[1]),
-				r1: +range[2] - 1,
-				c2: colIndexOf(range[3]),
-				r2: +range[4] - 1,
+				c1: colIndexOf(range[2]),
+				r1: +range[4] - 1,
+				c2: colIndexOf(range[6]),
+				r2: +range[8] - 1,
 			});
 			i += range[0].length;
 			continue;
 		}
-		// Excel-style whole-column range: B:B (all data rows of column B)
-		const cr = /^([A-Za-z]{1,2}):([A-Za-z]{1,2})(?!\d)/.exec(src.slice(i));
+		// Excel-style whole-column range: B:B (every row of column B, header
+		// included, exactly as Excel treats it; text cells drop out of numeric
+		// aggregates anyway, so this only shows when a header holds a number)
+		const cr = RE_COLRANGE.exec(src.slice(i));
 		if (cr) {
-			out.push({ t: "colrange", c1: colIndexOf(cr[1]), c2: colIndexOf(cr[2]) });
+			out.push({ t: "colrange", c1: colIndexOf(cr[2]), c2: colIndexOf(cr[4]) });
 			i += cr[0].length;
 			continue;
 		}
-		const ref = /^([A-Za-z]{1,2})(\d+)/.exec(src.slice(i));
+		const ref = RE_REF.exec(src.slice(i));
 		if (ref) {
-			out.push({ t: "ref", col: colIndexOf(ref[1]), row: +ref[2] - 1 });
+			out.push({ t: "ref", col: colIndexOf(ref[2]), row: +ref[4] - 1 });
 			i += ref[0].length;
 			continue;
 		}
-		throw new Error("bad token");
+		// A dead reference, or a name that is not a function: both are errors,
+		// but deferred ones. Throwing here would kill the whole formula at
+		// tokenize time, before any wrapping IFERROR could run, and in Excel
+		// IFERROR does catch #NAME? and #REF!. So emit the error as a token and
+		// let it fire when that part of the expression is actually evaluated.
+		if (src.startsWith(REF_DEAD, i)) {
+			out.push({ t: "err", v: REF_DEAD });
+			i += REF_DEAD.length;
+			continue;
+		}
+		const name = /^[A-Za-z_][A-Za-z0-9_.]*/.exec(src.slice(i));
+		if (name) {
+			out.push({ t: "err", v: ERR_NAME });
+			i += name[0].length;
+			continue;
+		}
+		throw new Error(ERR_NAME);
 	}
 	return out;
+}
+
+/**
+ * Split a cell into the wrappers around its visible text and the text itself.
+ * The formula bar shows the text, the way a spreadsheet shows a value rather
+ * than how it is stored, and a commit puts the new text back between the same
+ * wrappers, so editing 500 into 600 cannot cost you the bold, highlight, or
+ * color someone had put on it.
+ *
+ * Peels from the outside in, so the pieces reassemble in the right order no
+ * matter how HTML tags and markdown markers are nested.
+ */
+export function cellTextParts(inner: string): { lead: string; text: string; trail: string } {
+	const MARKS = ["***", "**", "__", "~~", "==", "*", "_", "`"];
+	let lead = "";
+	let trail = "";
+	let s = inner;
+	for (;;) {
+		const open = /^<[a-zA-Z][^>]*>/.exec(s);
+		if (open) {
+			lead += open[0];
+			s = s.slice(open[0].length);
+			continue;
+		}
+		const mark = MARKS.find((k) => s.length > k.length * 2 && s.startsWith(k) && s.endsWith(k));
+		if (mark) {
+			lead += mark;
+			trail = mark + trail;
+			s = s.slice(mark.length, s.length - mark.length);
+			continue;
+		}
+		const close = /<\/[a-zA-Z][^>]*>$/.exec(s);
+		if (close) {
+			trail = close[0] + trail;
+			s = s.slice(0, s.length - close[0].length);
+			continue;
+		}
+		break;
+	}
+	return { lead, text: s, trail };
 }
 
 /** Strip whole-value emphasis and markup noise from a cell's text for matching. */
@@ -1935,9 +2499,11 @@ export function matchCriteria(raw: string, crit: FVal): boolean {
 }
 
 /**
- * Evaluate a "=…" formula against the table's body rows. Cell refs are
- * letter+1-based-data-row (C2 = third column, second data row; the header is
- * not addressable). The formula's own cell is excluded from ranges and is an
+ * Evaluate a "=…" formula against a table grid. Cell refs are Excel-literal:
+ * letter + 1-based row counting the header, so C1 is column C's header cell and
+ * C2 is its first data row. A header cell is addressable like any other, which
+ * is what lets a formula live in one and be summed from elsewhere.
+ * The formula's own cell is excluded from ranges and is an
  * error as a direct ref (circularity guard on top of the recalc pass cap).
  * Numbers flow through math; text flows through refs, IF, and comparisons.
  * Throws on any invalid input, callers render #ERR.
@@ -1952,8 +2518,8 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 		return n ? n.value : null;
 	};
 	const refValue = (row: number, col: number): FVal => {
-		if (row === selfRow && col === selfCol) throw new Error("self reference");
-		if (row < 0 || row >= rows.length) throw new Error("out of range");
+		if (row === selfRow && col === selfCol) throw new Error(ERR_CIRC);
+		if (row < 0 || row >= rows.length) throw new Error(REF_DEAD);
 		const n = numAt(row, col);
 		if (n != null) return n;
 		return plainCellText(rows[row]?.[col] ?? "");
@@ -1969,7 +2535,22 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 		return cells;
 	};
 
-	type Arg = { cells: { r: number; c: number }[] } | { v: FVal };
+	/** A range's clamped rectangle. Aggregates walk `cells`, which drops the
+	 *  formula's own cell; lookups need the shape instead, and a hole would
+	 *  shift every position after it, so they read the box off the grid. */
+	type Box = { r1: number; r2: number; c1: number; c2: number };
+	type Arg = { cells: { r: number; c: number }[]; box: Box } | { v: FVal };
+
+	const boxOf = (r1: number, r2: number, c1: number, c2: number): Box => ({
+		r1: Math.max(0, Math.min(r1, r2)),
+		r2: Math.min(rows.length - 1, Math.max(r1, r2)),
+		c1: Math.min(c1, c2),
+		c2: Math.max(c1, c2),
+	});
+	const rangeArg = (r1: number, r2: number, c1: number, c2: number): Arg => ({
+		cells: rangeCells(r1, r2, c1, c2),
+		box: boxOf(r1, r2, c1, c2),
+	});
 
 	function fnArgs(): Arg[] {
 		const args: Arg[] = [];
@@ -1981,20 +2562,20 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 			const t = peek();
 			if (t?.t === "range") {
 				next();
-				args.push({ cells: rangeCells(t.r1, t.r2, t.c1, t.c2) });
+				args.push(rangeArg(t.r1, t.r2, t.c1, t.c2));
 			} else if (t?.t === "colrange") {
 				next();
-				args.push({ cells: rangeCells(0, rows.length - 1, t.c1, t.c2) });
+				args.push(rangeArg(0, rows.length - 1, t.c1, t.c2));
 			} else if (t?.t === "rowrange") {
 				next();
 				const width = Math.max(0, ...rows.map((r) => r.length)) - 1;
-				args.push({ cells: rangeCells(t.r1, t.r2, 0, width) });
+				args.push(rangeArg(t.r1, t.r2, 0, width));
 			} else {
 				args.push({ v: cmp() });
 			}
 			const sep = next();
 			if (sep?.t === "rp") break;
-			if (sep?.t !== "comma") throw new Error("expected , or )");
+			if (sep?.t !== "comma") throw new Error(ERR_NAME);
 		}
 		return args;
 	}
@@ -2010,33 +2591,52 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 						if (v != null) out.push(v);
 					}
 				} else if (typeof a.v === "number") out.push(a.v);
-				else throw new Error("text where a number was expected");
+				else throw new Error(ERR_VALUE);
 			}
 			return out;
 		};
 		const asNum = (a: Arg | undefined): number => {
-			if (!a || "cells" in a || typeof a.v !== "number") throw new Error("expected a number");
+			if (!a || "cells" in a || typeof a.v !== "number") throw new Error(ERR_VALUE);
 			return a.v;
 		};
-		switch (name) {
-			case "SUM": {
-				const v = nums();
-				if (!v.length) throw new Error("no values");
-				return v.reduce((x, y) => x + y, 0);
+		const asText = (a: Arg | undefined): string => {
+			if (!a || "cells" in a) throw new Error(ERR_VALUE);
+			return String(a.v);
+		};
+		/** Excel's truthiness: any nonzero number, any non-empty text. */
+		const truthy = (v: FVal): boolean => (typeof v === "number" ? v !== 0 : v.length > 0);
+		/** A looked-up cell comes back as a number when it reads as one. */
+		const cellValue = (r: number, c: number): FVal => {
+			const raw = rows[r]?.[c] ?? "";
+			const n = parseNumeric(plainCellText(raw));
+			return n ? n.value : plainCellText(raw);
+		};
+		/** Lookups read the grid directly, so they have to refuse a range that
+		 *  contains the formula itself rather than quietly reading a stale copy
+		 *  of their own output. */
+		const guardSelf = (b: Box) => {
+			if (selfRow >= b.r1 && selfRow <= b.r2 && selfCol >= b.c1 && selfCol <= b.c2) {
+				throw new Error(ERR_CIRC);
 			}
+		};
+		switch (name) {
+			case "SUM":
+				// Excel sums nothing to 0 rather than complaining; a total over an
+				// empty column should read 0, not shout at you
+				return nums().reduce((x, y) => x + y, 0);
 			case "AVG": {
 				const v = nums();
-				if (!v.length) throw new Error("no values");
+				if (!v.length) throw new Error(ERR_DIV0);
 				return v.reduce((x, y) => x + y, 0) / v.length;
 			}
 			case "MIN": {
 				const v = nums();
-				if (!v.length) throw new Error("no values");
+				if (!v.length) return 0;
 				return Math.min(...v);
 			}
 			case "MAX": {
 				const v = nums();
-				if (!v.length) throw new Error("no values");
+				if (!v.length) return 0;
 				return Math.max(...v);
 			}
 			case "COUNT":
@@ -2050,18 +2650,18 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 				return Math.round(v * f) / f;
 			}
 			case "IF": {
-				if (args.length < 2 || "cells" in args[0]) throw new Error("IF(condition, then, else)");
+				if (args.length < 2 || "cells" in args[0]) throw new Error(ERR_VALUE);
 				const cond = args[0].v;
 				const truthy = typeof cond === "number" ? cond !== 0 : cond.length > 0;
 				const pick = truthy ? args[1] : (args[2] ?? { v: "" });
-				if ("cells" in pick) throw new Error("IF branches must be values");
+				if ("cells" in pick) throw new Error(ERR_VALUE);
 				return pick.v;
 			}
 			case "SUMIF": {
 				const range = args[0];
 				const crit = args[1];
 				if (!range || !("cells" in range) || !crit || "cells" in crit) {
-					throw new Error("SUMIF(range, criteria, optional sum range)");
+					throw new Error(ERR_VALUE);
 				}
 				const sumRange = args[2] && "cells" in args[2] ? args[2].cells : range.cells;
 				let total = 0;
@@ -2078,49 +2678,301 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 				const range = args[0];
 				const crit = args[1];
 				if (!range || !("cells" in range) || !crit || "cells" in crit) {
-					throw new Error("COUNTIF(range, criteria)");
+					throw new Error(ERR_VALUE);
 				}
 				let n = 0;
 				for (const { r, c } of range.cells) if (matchCriteria(rows[r]?.[c] ?? "", crit.v)) n++;
 				return n;
 			}
+			case "AVERAGEIF": {
+				const range = args[0];
+				const crit = args[1];
+				if (!range || !("cells" in range) || !crit || "cells" in crit) {
+					throw new Error(ERR_VALUE);
+				}
+				const avgRange = args[2] && "cells" in args[2] ? args[2].cells : range.cells;
+				let total = 0;
+				let n = 0;
+				for (let k = 0; k < range.cells.length; k++) {
+					const { r, c } = range.cells[k];
+					if (!matchCriteria(rows[r]?.[c] ?? "", crit.v)) continue;
+					const cell = avgRange[k] ?? range.cells[k];
+					const v = numAt(cell.r, cell.c);
+					if (v != null) {
+						total += v;
+						n++;
+					}
+				}
+				if (!n) throw new Error(ERR_DIV0);
+				return total / n;
+			}
+			case "MEDIAN": {
+				const v = nums().sort((a, b) => a - b);
+				if (!v.length) throw new Error(ERR_NUM);
+				const mid = Math.floor(v.length / 2);
+				return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+			}
+			case "PRODUCT": {
+				const v = nums();
+				if (!v.length) return 0;
+				return v.reduce((x, y) => x * y, 1);
+			}
+			case "STDEV": {
+				// the sample deviation, which is Excel's plain STDEV
+				const v = nums();
+				if (v.length < 2) throw new Error(ERR_DIV0);
+				const mean = v.reduce((x, y) => x + y, 0) / v.length;
+				return Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / (v.length - 1));
+			}
+			case "SUMPRODUCT": {
+				const lists = args.map((a) => {
+					if (!("cells" in a)) throw new Error(ERR_VALUE);
+					return a.cells.map(({ r, c }) => numAt(r, c) ?? 0);
+				});
+				if (!lists.length) return 0;
+				const n = lists[0].length;
+				if (lists.some((l) => l.length !== n)) throw new Error(ERR_VALUE);
+				let total = 0;
+				for (let k = 0; k < n; k++) total += lists.reduce((x, l) => x * l[k], 1);
+				return total;
+			}
+			case "POWER":
+				return Math.pow(asNum(args[0]), asNum(args[1]));
+			case "SQRT": {
+				const v = asNum(args[0]);
+				if (v < 0) throw new Error(ERR_NUM);
+				return Math.sqrt(v);
+			}
+			case "INT":
+				return Math.floor(asNum(args[0]));
+			case "MOD": {
+				const d = asNum(args[1]);
+				if (!d) throw new Error(ERR_DIV0);
+				// Excel's remainder takes the divisor's sign, unlike JS %
+				const n = asNum(args[0]);
+				return n - d * Math.floor(n / d);
+			}
+			case "ROUNDUP":
+			case "ROUNDDOWN": {
+				const v = asNum(args[0]);
+				const d = args.length > 1 ? asNum(args[1]) : 0;
+				const f = Math.pow(10, Math.round(d));
+				const away = name === "ROUNDUP" ? Math.ceil : Math.floor;
+				return ((v < 0 ? -1 : 1) * away(Math.abs(v) * f)) / f;
+			}
+			case "COUNTA":
+			case "COUNTBLANK": {
+				const wantBlank = name === "COUNTBLANK";
+				let n = 0;
+				for (const a of args) {
+					if ("cells" in a) {
+						for (const { r, c } of a.cells) {
+							if ((plainCellText(rows[r]?.[c] ?? "") === "") === wantBlank) n++;
+						}
+					} else if ((a.v === "") === wantBlank) n++;
+				}
+				return n;
+			}
+			case "AND":
+			case "OR": {
+				const vals: FVal[] = [];
+				for (const a of args) {
+					if ("cells" in a) for (const { r, c } of a.cells) vals.push(plainCellText(rows[r]?.[c] ?? ""));
+					else vals.push(a.v);
+				}
+				if (!vals.length) throw new Error(ERR_VALUE);
+				return (name === "AND" ? vals.every(truthy) : vals.some(truthy)) ? 1 : 0;
+			}
+			case "NOT": {
+				const a = args[0];
+				if (!a || "cells" in a) throw new Error(ERR_VALUE);
+				return truthy(a.v) ? 0 : 1;
+			}
+			case "LEN":
+				return asText(args[0]).length;
+			case "LEFT":
+				return asText(args[0]).slice(0, args.length > 1 ? Math.max(0, Math.round(asNum(args[1]))) : 1);
+			case "RIGHT": {
+				const s = asText(args[0]);
+				const n = args.length > 1 ? Math.max(0, Math.round(asNum(args[1]))) : 1;
+				return n >= s.length ? s : s.slice(s.length - n);
+			}
+			case "MID": {
+				const s = asText(args[0]);
+				const from = Math.round(asNum(args[1]));
+				const len = Math.round(asNum(args[2]));
+				if (from < 1 || len < 0) throw new Error(ERR_VALUE);
+				return s.slice(from - 1, from - 1 + len);
+			}
+			case "TRIM":
+				return asText(args[0]).replace(/\s+/g, " ").trim();
+			case "UPPER":
+				return asText(args[0]).toUpperCase();
+			case "LOWER":
+				return asText(args[0]).toLowerCase();
+			case "CONCAT": {
+				let s = "";
+				for (const a of args) {
+					if ("cells" in a) for (const { r, c } of a.cells) s += plainCellText(rows[r]?.[c] ?? "");
+					else s += String(a.v);
+				}
+				return s;
+			}
+			case "VLOOKUP": {
+				const key = args[0];
+				const table = args[1];
+				if (!key || "cells" in key || !table || !("cells" in table)) {
+					throw new Error(ERR_VALUE);
+				}
+				guardSelf(table.box);
+				const at = Math.round(asNum(args[2]));
+				if (at < 1 || table.box.c1 + at - 1 > table.box.c2) throw new Error(REF_DEAD);
+				for (let r = table.box.r1; r <= table.box.r2; r++) {
+					if (!matchCriteria(rows[r]?.[table.box.c1] ?? "", key.v)) continue;
+					return cellValue(r, table.box.c1 + at - 1);
+				}
+				throw new Error(ERR_NA);
+			}
+			case "MATCH": {
+				const key = args[0];
+				const range = args[1];
+				if (!key || "cells" in key || !range || !("cells" in range)) throw new Error(ERR_VALUE);
+				guardSelf(range.box);
+				let k = 0;
+				for (let r = range.box.r1; r <= range.box.r2; r++) {
+					for (let c = range.box.c1; c <= range.box.c2; c++) {
+						k++;
+						if (matchCriteria(rows[r]?.[c] ?? "", key.v)) return k;
+					}
+				}
+				throw new Error(ERR_NA);
+			}
+			case "INDEX": {
+				const range = args[0];
+				if (!range || !("cells" in range)) throw new Error(ERR_VALUE);
+				guardSelf(range.box);
+				const rr = Math.round(asNum(args[1]));
+				const cc = args.length > 2 ? Math.round(asNum(args[2])) : 1;
+				const r = range.box.r1 + rr - 1;
+				const c = range.box.c1 + cc - 1;
+				if (rr < 1 || cc < 1 || r > range.box.r2 || c > range.box.c2) throw new Error(REF_DEAD);
+				return cellValue(r, c);
+			}
+			case "YEAR":
+			case "MONTH":
+			case "DAY": {
+				const d = parseDateCell(asText(args[0]));
+				if (!d) throw new Error(ERR_VALUE);
+				return name === "YEAR" ? d.y : name === "MONTH" ? d.m : d.d;
+			}
 			default:
-				throw new Error("unknown fn");
+				throw new Error(ERR_NAME);
 		}
+	}
+
+	/** Walk to the comma or paren that closes the current argument, ignoring
+	 *  any nested call's own punctuation. */
+	function endOfArg(): FTok | undefined {
+		let depth = 0;
+		while (p < toks.length) {
+			const tk = toks[p];
+			if (tk.t === "lp") depth++;
+			else if (tk.t === "rp") {
+				if (depth === 0) return tk;
+				depth--;
+			} else if (tk.t === "comma" && depth === 0) return tk;
+			p++;
+		}
+		return undefined;
+	}
+
+	/**
+	 * IFERROR is the one function that cannot take its arguments eagerly: the
+	 * whole point is to survive a first argument that throws. So try it, rewind
+	 * on failure, and take the fallback instead. Neither branch evaluates the
+	 * side it does not return, which is why both skip rather than parse.
+	 */
+	function ifErrorCall(): FVal {
+		const startP = p;
+		let ok = true;
+		let value: FVal = "";
+		try {
+			value = cmp();
+		} catch {
+			ok = false;
+			p = startP;
+		}
+		if (endOfArg()?.t !== "comma") throw new Error(ERR_VALUE);
+		p++;
+		if (ok) {
+			endOfArg();
+			if (next()?.t !== "rp") throw new Error(ERR_NAME);
+			return value;
+		}
+		const fallback = cmp();
+		if (next()?.t !== "rp") throw new Error(ERR_NAME);
+		return fallback;
 	}
 
 	function factor(): FVal {
 		const t = next();
-		if (!t) throw new Error("unexpected end");
+		if (!t) throw new Error(ERR_NAME);
 		if (t.t === "num") return t.v;
 		if (t.t === "str") return t.v;
+		if (t.t === "err") throw new Error(t.v);
 		if (t.t === "ref") return refValue(t.row, t.col);
 		if (t.t === "op" && (t.v === "-" || t.v === "+")) {
 			const v = factor();
-			if (typeof v !== "number") throw new Error("text in arithmetic");
+			if (typeof v !== "number") throw new Error(ERR_VALUE);
 			return t.v === "-" ? -v : v;
 		}
 		if (t.t === "fn") {
 			const lp = next();
-			if (lp?.t !== "lp") throw new Error("expected (");
-			return fnCall(t.v);
+			if (lp?.t !== "lp") throw new Error(ERR_NAME);
+			return t.v === "IFERROR" ? ifErrorCall() : fnCall(t.v);
 		}
 		if (t.t === "lp") {
 			const v = cmp();
-			if (next()?.t !== "rp") throw new Error("expected )");
+			if (next()?.t !== "rp") throw new Error(ERR_NAME);
 			return v;
 		}
-		throw new Error("unexpected token");
+		throw new Error(ERR_NAME);
+	}
+
+	/** Excel binds % tighter than ^, and unary minus tighter than both, so -50%
+	 *  is -0.5 and -2^2 is 4. factor() already took the sign. */
+	function pct(): FVal {
+		let v = factor();
+		while (peek()?.t === "op" && (peek() as { v: string }).v === "%") {
+			next();
+			if (typeof v !== "number") throw new Error(ERR_VALUE);
+			v = v / 100;
+		}
+		return v;
+	}
+
+	/** Right-associative, as in Excel: 2^3^2 is 2^(3^2). */
+	function power(): FVal {
+		const base = pct();
+		const t = peek();
+		if (t?.t === "op" && t.v === "^") {
+			next();
+			const exp = power();
+			if (typeof base !== "number" || typeof exp !== "number") throw new Error(ERR_VALUE);
+			return Math.pow(base, exp);
+		}
+		return base;
 	}
 
 	function term(): FVal {
-		let v = factor();
+		let v = power();
 		for (;;) {
 			const t = peek();
 			if (t?.t === "op" && (t.v === "*" || t.v === "/")) {
 				next();
-				const rhs = factor();
-				if (typeof v !== "number" || typeof rhs !== "number") throw new Error("text in arithmetic");
+				const rhs = power();
+				if (typeof v !== "number" || typeof rhs !== "number") throw new Error(ERR_VALUE);
+				if (t.v === "/" && rhs === 0) throw new Error(ERR_DIV0);
 				v = t.v === "*" ? v * rhs : v / rhs;
 			} else return v;
 		}
@@ -2133,18 +2985,32 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 			if (t?.t === "op" && (t.v === "+" || t.v === "-")) {
 				next();
 				const rhs = term();
-				if (typeof v !== "number" || typeof rhs !== "number") throw new Error("text in arithmetic");
+				if (typeof v !== "number" || typeof rhs !== "number") throw new Error(ERR_VALUE);
 				v = t.v === "+" ? v + rhs : v - rhs;
 			} else return v;
 		}
 	}
 
+	/** Excel's & joins text, looser than arithmetic and tighter than comparison,
+	 *  and it stringifies numbers rather than refusing them. */
+	function concat(): FVal {
+		let v = add();
+		for (;;) {
+			const t = peek();
+			if (t?.t === "op" && t.v === "&") {
+				next();
+				const rhs = add();
+				v = `${v}${rhs}`;
+			} else return v;
+		}
+	}
+
 	function cmp(): FVal {
-		const a = add();
+		const a = concat();
 		const t = peek();
 		if (t?.t === "op" && [">", "<", ">=", "<=", "=", "<>"].includes(t.v)) {
 			next();
-			const b = add();
+			const b = concat();
 			let res: boolean;
 			if (typeof a === "number" && typeof b === "number") {
 				res =
@@ -2154,15 +3020,15 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 				const y = b.toLowerCase();
 				res =
 					t.v === ">" ? x > y : t.v === "<" ? x < y : t.v === ">=" ? x >= y : t.v === "<=" ? x <= y : t.v === "=" ? x === y : x !== y;
-			} else throw new Error("mixed comparison");
+			} else throw new Error(ERR_VALUE);
 			return res ? 1 : 0;
 		}
 		return a;
 	}
 
 	const result = cmp();
-	if (p !== toks.length) throw new Error("trailing tokens");
-	if (typeof result === "number" && !isFinite(result)) throw new Error("not finite");
+	if (p !== toks.length) throw new Error(ERR_NAME);
+	if (typeof result === "number" && !isFinite(result)) throw new Error(ERR_NUM);
 	return result;
 }
 
@@ -2173,7 +3039,7 @@ export function formatFormulaResult(v: FVal): string {
 
 /** Does this raw cell text look like an attempted formula? (Casual "=text" cells are left alone.) */
 export function looksLikeFormula(inner: string): boolean {
-	return /^=\s*(?:SUMIF|COUNTIF|SUM|AVERAGE|AVG|MIN|MAX|COUNT|IF|ROUND|ABS|\(|-|\d|['"]|[A-Za-z]{1,2}\d)/i.test(inner);
+	return new RegExp(`^=\\s*(?:${FN_NAMES}|\\(|-|\\d|['"]|#|\\$|[A-Za-z]{1,2}\\d)`, "i").test(inner);
 }
 
 /**
@@ -2195,14 +3061,18 @@ export function planSetCellValue(lines: string[], target: CellTargetLoc, raw: st
 		let value = "#ERR";
 		if (g) {
 			try {
-				value = formatFormulaResult(evalFormula(t, g.rows, ln - g.bodyStart, col));
-			} catch {
-				value = "#ERR";
+				value = formatFormulaResult(evalFormula(t, g.rows, gridRowOf(g, ln), col));
+			} catch (e) {
+				value = formulaErrorText(e);
 			}
 		}
 		rebuilt = buildCellContent(value, parsed.bg, parsed.fg, null, t, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl);
 	} else {
-		rebuilt = buildCellContent(t, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl);
+		// slot the new text back inside the wrappers the old text wore; clearing
+		// the cell outright drops them, since there is nothing left to wrap
+		const parts = cellTextParts(parsed.inner);
+		const kept = t ? parts.lead + t + parts.trail : "";
+		rebuilt = buildCellContent(kept, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl);
 	}
 	r.pieces[col + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
 	const text = r.prefix + r.pieces.join("|");
@@ -2886,6 +3756,8 @@ export function planSelectionCalc(
 	const bodyStart = delimIdx + 1;
 	const cells = targets.filter((t) => t.line >= bodyStart && t.line <= end);
 	if (!cells.length) return null;
+	const grid = tableGrid(lines, ln0);
+	if (!grid) return null;
 	const r1 = Math.min(...cells.map((t) => t.line));
 	const r2 = Math.max(...cells.map((t) => t.line));
 	const c1 = Math.min(...cells.map((t) => t.col));
@@ -2910,18 +3782,16 @@ export function planSelectionCalc(
 	else if (r1 === r2 && result.line === r1 && result.col === c2) cc2 = c2 - 1;
 	if (rr2 < r1 || cc2 < c1) return { edits: [], cursorLine: ln0, cursorCh: 0, formatted: "", count: 0, ref: "" };
 
-	const refOf = (line: number, col: number) => `${colLetterOf(col)}${line - delimIdx}`;
+	const refOf = (line: number, col: number) => `${colLetterOf(col)}${gridRowOf(grid, line) + 1}`;
 	const a = refOf(r1, c1);
 	const b = refOf(rr2, cc2);
 	const range = a === b ? a : `${a}:${b}`;
 
-	const grid = tableGrid(lines, ln0);
-	if (!grid) return null;
 	let count = 0;
 	for (let l = r1; l <= rr2; l++) {
 		for (let c = c1; c <= cc2; c++) {
 			if (l === result.line && c === result.col) continue;
-			if (parseNumeric(grid.rows[l - bodyStart]?.[c] ?? "")) count++;
+			if (parseNumeric(grid.rows[gridRowOf(grid, l)]?.[c] ?? "")) count++;
 		}
 	}
 	if (!count) return { edits: [], cursorLine: ln0, cursorCh: 0, formatted: "", count: 0, ref: range };
@@ -2947,6 +3817,109 @@ export function planSelectionCalc(
  * ragged rows normalized to the full column count. Purely cosmetic in the
  * source; rendering is unchanged.
  */
+/**
+ * Excel's Fill Down and Fill Right. A selection spanning more than one row (or
+ * column) uses its leading edge as the source and fills the rest; a single cell
+ * fills from the neighbor above (or to the left), which is what Excel does when
+ * you press Ctrl+D with nothing else selected.
+ *
+ * A filled formula moves by the distance it travelled, so relative refs follow
+ * it and $-anchored ones hold still: =C2-B2 filled down becomes =C3-B3, while
+ * =C2*$B$1 keeps its rate. The whole cell travels, presentation included, minus
+ * the markers that describe a column rather than a cell (width, column rules,
+ * table flags), which stay with the destination.
+ */
+export function planFill(
+	lines: string[],
+	targets: { line: number; col: number }[],
+	dir: "down" | "right"
+): (EditPlan & { filled: number }) | null {
+	if (!targets.length) return null;
+	const { start, end, delimIdx } = tableBounds(lines, targets[0].line);
+	if (delimIdx < 0) return null;
+	const inTable = targets.filter((t) => t.line >= start && t.line <= end && t.line !== delimIdx);
+	if (!inTable.length) return null;
+	const r1 = Math.min(...inTable.map((t) => t.line));
+	const r2 = Math.max(...inTable.map((t) => t.line));
+	const c1 = Math.min(...inTable.map((t) => t.col));
+	const c2 = Math.max(...inTable.map((t) => t.col));
+
+	// every real row of the table, in order: position k is grid row k, which is
+	// what a fill distance has to be measured in (the delimiter is not a row)
+	const rowLines: number[] = [];
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) rowLines.push(i);
+	}
+	const gridIdx = new Map(rowLines.map((l, k) => [l, k]));
+
+	let srcLine = r1;
+	let srcCol = c1;
+	let dstLines: number[];
+	const dstCols: number[] = [];
+	if (dir === "down") {
+		const span = rowLines.filter((l) => l >= r1 && l <= r2);
+		if (span.length > 1) {
+			srcLine = span[0];
+			dstLines = span.slice(1);
+		} else {
+			const above = rowLines.filter((l) => l < r1);
+			if (!above.length) return null;
+			srcLine = above[above.length - 1];
+			dstLines = [r1];
+		}
+		for (let c = c1; c <= c2; c++) dstCols.push(c);
+	} else {
+		if (c2 > c1) {
+			for (let c = c1 + 1; c <= c2; c++) dstCols.push(c);
+		} else {
+			if (c1 === 0) return null;
+			srcCol = c1 - 1;
+			dstCols.push(c1);
+		}
+		dstLines = rowLines.filter((l) => l >= r1 && l <= r2);
+	}
+	if (!dstLines.length || !dstCols.length) return null;
+
+	const fillCell = (srcPiece: string, dstPiece: string, op: RefOp): string => {
+		const s = parseCellContent(srcPiece);
+		const d = parseCellContent(dstPiece);
+		let inner = s.inner;
+		let formula: string | null = null;
+		if (s.formula) formula = shiftFormulaRefs(s.formula, op);
+		else if (looksLikeFormula(s.inner)) inner = shiftFormulaRefs(s.inner, op);
+		const content = buildCellContent(inner, s.bg, s.fg, s.calc, formula, s.borders, s.fmt, s.hl, d.w, d.rule, d.tbl);
+		return content ? ` ${content} ` : "   ";
+	};
+
+	const edits: { line: number; text: string }[] = [];
+	let filled = 0;
+	for (const dl of dstLines) {
+		const r = parseRow(lines[dl]);
+		if (!r) continue;
+		for (const dc of dstCols) {
+			if (dc >= r.cellCount) continue;
+			const sl = dir === "down" ? srcLine : dl;
+			const sc = dir === "down" ? dc : srcCol;
+			const sr = parseRow(lines[sl]);
+			if (!sr || sc >= sr.cellCount) continue;
+			const op: RefOp =
+				dir === "down"
+					? { axis: "row", kind: "offset", delta: (gridIdx.get(dl) ?? 0) - (gridIdx.get(sl) ?? 0) }
+					: { axis: "col", kind: "offset", delta: dc - sc };
+			const before = r.pieces[dc + 1];
+			const after = fillCell(sr.pieces[sc + 1], before, op);
+			if (after === before) continue;
+			r.pieces[dc + 1] = after;
+			filled++;
+		}
+		const text = r.prefix + r.pieces.join("|");
+		if (text !== lines[dl]) edits.push({ line: dl, text });
+	}
+	const last = dstLines[dstLines.length - 1];
+	return { edits, cursorLine: last, cursorCh: cursorForCol(lines[last], dstCols[dstCols.length - 1]), filled };
+}
+
 export function planPrettify(lines: string[], target: CellTargetLoc): (EditPlan & { rows: number }) | null {
 	const ln = locateLine(lines, target);
 	if (ln == null) return null;
