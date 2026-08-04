@@ -32,15 +32,33 @@
    drag would resize that column. Applied to the cell itself, which belongs to
    the rendered table rather than to this plugin, hence the element in the
    selector: it has to outrank whatever the theme puts on a th. */
-th.ptb-col-edge,
-td.ptb-col-edge {
+/* The cursor is scoped under the two containers headerEdgeAt already requires,
+   and repeated for everything inside the cell. It is the one declaration here
+   with a competitor: the editor puts its own cursor on table cells and on the
+   content within them, and a bare th.ptb-col-edge only ties with that, so the
+   later stylesheet won and the pointer never changed. The box-shadow below was
+   uncontested, which is why the line showed up while the cursor did not.
+   The descendant selectors matter because the pointer is usually over a span
+   or a text node inside the cell rather than the cell itself. */
+.markdown-rendered th.ptb-col-edge,
+.markdown-rendered td.ptb-col-edge,
+.cm-table-widget th.ptb-col-edge,
+.cm-table-widget td.ptb-col-edge,
+.markdown-rendered th.ptb-col-edge *,
+.markdown-rendered td.ptb-col-edge *,
+.cm-table-widget th.ptb-col-edge *,
+.cm-table-widget td.ptb-col-edge * {
 	cursor: col-resize;
-	/* Draw the line that is about to move. The cursor alone told you a drag was
-	   possible but not which boundary it would take, which matters now that the
-	   band is grabbable from both sides: the highlighted edge is always the one
-	   the drag will resize, including when you approached it from the column to
-	   its right. Inset so it sits on the cell's own edge without changing
-	   layout, which a border would. */
+}
+
+/* Draw the line that is about to move. The cursor says a drag is possible; this
+   says which of the two boundaries it will take, which started mattering once
+   the band became grabbable from either side. Inset so it sits on the cell's
+   own edge without changing layout, which a border would. */
+.markdown-rendered th.ptb-col-edge,
+.markdown-rendered td.ptb-col-edge,
+.cm-table-widget th.ptb-col-edge,
+.cm-table-widget td.ptb-col-edge {
 	box-shadow: inset -2px 0 0 0 var(--interactive-accent);
 }
 
@@ -1436,6 +1454,29 @@ button.ptb-dropbtn {
 .cm-table-widget :is(td, th)[data-ptb-b*="#grey"] { border-color: var(--text-faint); }
 
 /* the pen is armed: the table says so, and the pointer says what it will do */
+/* ---------- format painter ---------- */
+
+/* The brush is a modal tool like the pen, so it advertises itself the same way:
+   a body class drives both the button's state and the cursor over cells. Before
+   this the brush looked identical loaded or not, which is why a painter that
+   fired once and quietly disarmed read as "it only works one time". */
+body.ptb-painting .ptb-paintbtn {
+	color: var(--text-on-accent);
+	background: var(--interactive-accent);
+}
+
+/* Locked adds a ring rather than a different fill: it should read as "the same
+   tool, still held" instead of as a different button. */
+body.ptb-painting-locked .ptb-paintbtn {
+	box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--interactive-accent);
+}
+
+/* copy, not crosshair: the pointer is about to apply a held look to whatever it
+   lands on, and the pen already owns crosshair for drawing borders */
+body.ptb-painting :is(.markdown-rendered, .cm-table-widget) table :is(td, th) {
+	cursor: copy;
+}
+
 body.ptb-drawing :is(.markdown-rendered, .cm-table-widget) table :is(td, th) {
 	cursor: crosshair;
 }
