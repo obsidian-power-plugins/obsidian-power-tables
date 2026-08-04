@@ -113,6 +113,22 @@ The **formula bar completes function names** as you type: `=VL` offers `VLOOKUP`
 
 **Rules…** (sidebar or command palette) colors cells in the targeted column by condition: pick an operator (greater than / less than / equals / contains / between / is empty / is not empty / matches pattern), a value where the condition needs one (`between` takes `10 ~ 20`; patterns are case-insensitive regular expressions), and fill/text colors. Classic use: negatives in red (`less than 0` gives red text). The **color scale (min→max)** condition is different: it tints every numeric cell between two fills by where its value sits in the column's range. Pick the low and high colors where the color rows normally are, and the gradient re-shades live as values change. **Apply once** paints the matches now and stores nothing; **Add rule** stores the rule on the column's header cell and re-applies it automatically as values change. A column can hold several rules: they are checked top to bottom and the first match colors the cell, so put the more specific condition first. Colors you set by hand on individual cells always win over rules. Reopen **Rules…** on any cell in the column to see its rules and edit or remove them (removing a rule leaves the colors it already painted). Rules live per column, so every column of every table can have its own set. The dialog floats, so drag it by its title if it covers your table.
 
+### Format painter
+
+The **brush** in the Text row copies one cell's look and paints it onto others. What travels is the appearance: fill and text colors, whether the fill is a highlight, cell borders, and the number format. What stays behind is the value, the column width, and any calculation or formula, because those are not how a cell looks and a painter that moved them would be a different tool.
+
+The brush **cycles through three states**, so nothing is hidden behind a gesture you have to know about:
+
+| Click | State | What happens |
+| --- | --- | --- |
+| once | **loaded** (brush lights up) | the next cell you click gets the look, then the brush lets go |
+| twice | **locked** (brush gains a ring) | every cell you click gets the look, until you stop it |
+| again | off | the brush lets go |
+
+While the brush is holding something the pointer turns into a copy cursor over table cells, so you can tell at a glance that the next click will paint rather than select. **Esc** puts it down from either state, as does clicking the brush. Coming from Excel, a double-click still lands you on locked, because two clicks cycle there anyway.
+
+**Copying a cell that has no formatting is a normal thing to do**: the brush then holds "no look", and painting strips colors, borders, and number format off whatever you click. That is how you clear formatting from a few scattered cells without touching their values.
+
 ### Sort & reorder
 
 The **Sort** button sorts the table's body rows by the targeted column, ascending or descending:
