@@ -666,6 +666,46 @@ tr.ptb-fhidden {
 	background-color: var(--background-modifier-hover);
 }
 
+/* ---------- data validation: the picker chevron ----------
+   The cell keeps its own content, colors and number format; the chevron sits
+   beside it. Marked with a class rather than matched with :has(), for the
+   reason given above the funnel. */
+.ptb-hasdrop {
+	position: relative;
+	padding-right: 18px;
+}
+
+.ptb-drop {
+	position: absolute;
+	top: 50%;
+	right: 2px;
+	transform: translateY(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	z-index: 2;
+	border-radius: 3px;
+	color: var(--text-faint);
+	opacity: 0.45;
+	cursor: pointer;
+}
+
+/* faint until wanted: a whole column of chevrons at full strength reads as
+   clutter, and one that vanishes entirely cannot be found on a touch screen */
+.ptb-hasdrop:hover .ptb-drop,
+.ptb-drop:hover {
+	opacity: 1;
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ptb-drop .svg-icon {
+	width: 11px;
+	height: 11px;
+}
+
 /* ---------- the AutoFilter dropdown ---------- */
 .ptb-fdrop {
 	position: fixed;
