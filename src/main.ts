@@ -76,6 +76,8 @@ import {
 	planSetColumnList,
 	columnListAt,
 	columnDistinct,
+	barPercents,
+	parseRuleTags,
 	listValues,
 	edgeInDirection,
 	parseFilterTag,
@@ -1047,6 +1049,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.closeFilterMenu();
 		document.body.querySelectorAll(".ptb-funnel, .ptb-drop").forEach((f) => f.remove());
 		document.body.querySelectorAll(".ptb-hasdrop").forEach((c) => (c as HTMLElement).removeClass("ptb-hasdrop"));
+		document.body.querySelectorAll(".ptb-bar").forEach((c) => this.clearBar(c as HTMLElement));
 		document.body.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
 			(cell as HTMLElement).style.removeProperty("background-color");
@@ -1103,6 +1106,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.renderCheckboxes();
 		this.renderFunnels();
 		this.renderDrops();
+		this.renderDataBars();
 		this.renderGuides();
 		this.renderFillHandle();
 	}
@@ -1656,6 +1660,71 @@ export default class PowerTablesPlugin extends Plugin {
 			}
 			row.toggleClass("ptb-fhidden", hide);
 		}
+	}
+
+	/* ---------------- data bars ---------------- */
+
+	/**
+	 * Draw each column that has a bar rule.
+	 *
+	 * Unlike the color-scale rule, which writes a resolved color into every
+	 * cell, nothing is written to the note here. A color survives the plugin
+	 * being removed and is worth storing for that; a bar cannot survive it at
+	 * all, so storing one would buy nothing and rewrite every cell of the column
+	 * each time any value in it changed.
+	 *
+	 * The lengths are measured over the rows on screen, so filtering a column
+	 * re-scales the bars to what is left rather than to rows nobody can see.
+	 */
+	private renderDataBars() {
+		document.body
+			.querySelectorAll<HTMLTableElement>(":is(.markdown-rendered, .cm-table-widget) table")
+			.forEach((tbl) => {
+				const head = tbl.rows[0];
+				if (!head) return;
+				const colors = Array.from(head.cells).map((c) => {
+					const tag = c.querySelector<HTMLElement>("span.ptb[data-rule]")?.getAttribute("data-rule");
+					return tag ? (parseRuleTags(tag).find((r) => r.op === "bar")?.value ?? null) : null;
+				});
+				if (!colors.some(Boolean)) {
+					if (tbl.querySelector(".ptb-bar")) tbl.querySelectorAll(".ptb-bar").forEach((c) => this.clearBar(c as HTMLElement));
+					return;
+				}
+				const rows = Array.from(tbl.rows)
+					.slice(1)
+					.filter((tr) => !tr.hasClass("ptb-fhidden"));
+				for (let c = 0; c < colors.length; c++) {
+					const cells = rows.map((tr) => tr.cells[c]).filter(Boolean);
+					if (!colors[c]) {
+						cells.forEach((cell) => this.clearBar(cell));
+						continue;
+					}
+					const pcts = barPercents(cells.map((cell) => parseNumeric(cellText(cell))?.value ?? null));
+					cells.forEach((cell, i) => {
+						const pct = pcts[i];
+						if (pct == null) {
+							this.clearBar(cell);
+							return;
+						}
+						// every write is guarded: setting an attribute to the value
+						// it already holds still fires a mutation record, and the
+						// observer that fires would bring us straight back here
+						const width = `${pct}%`;
+						if (cell.style.getPropertyValue("--ptb-bar") !== width) cell.style.setProperty("--ptb-bar", width);
+						if (cell.style.getPropertyValue("--ptb-bar-color") !== colors[c]) {
+							cell.style.setProperty("--ptb-bar-color", colors[c] as string);
+						}
+						if (!cell.hasClass("ptb-bar")) cell.addClass("ptb-bar");
+					});
+				}
+			});
+	}
+
+	private clearBar(cell: HTMLElement) {
+		if (!cell.hasClass("ptb-bar")) return;
+		cell.removeClass("ptb-bar");
+		cell.style.removeProperty("--ptb-bar");
+		cell.style.removeProperty("--ptb-bar-color");
 	}
 
 	/* ---------------- data validation (the column's list, as a picker) ---------------- */
@@ -5810,6 +5879,7 @@ const RULE_OP_LABEL: Record<RuleOp, string> = {
 	notempty: "is not empty",
 	regex: "matches",
 	scale: "color scale (min→max)",
+	bar: "data bar",
 };
 
 class RulesModal extends Modal {
@@ -5856,14 +5926,14 @@ class RulesModal extends Modal {
 				const row = list.createDiv({ cls: "ptb-rulerow" });
 				if (this.editing === i) row.addClass("is-editing");
 				const chips = row.createSpan({ cls: "ptb-rulechips" });
-				const chipCols = r.op === "scale" ? (scaleColors(r.value) ?? [null, null]) : [r.bg, r.fg];
+				const chipCols = r.op === "scale" ? (scaleColors(r.value) ?? [null, null]) : r.op === "bar" ? [r.value, null] : [r.bg, r.fg];
 				for (const col of chipCols) {
 					const chip = chips.createSpan({ cls: "ptb-rulechip" });
 					if (col) chip.style.backgroundColor = col;
 					else chip.addClass("ptb-chip-none");
 				}
 				const cond =
-					r.op === "scale" || r.op === "empty" || r.op === "notempty"
+					r.op === "scale" || r.op === "bar" || r.op === "empty" || r.op === "notempty"
 						? RULE_OP_LABEL[r.op]
 						: `${RULE_OP_LABEL[r.op]} ${r.value}`;
 				row.createSpan({ cls: "ptb-rulecond", text: cond });
@@ -5900,7 +5970,8 @@ class RulesModal extends Modal {
 		}
 		c.createDiv({ cls: "ptb-label", text: this.editing != null ? `Edit rule ${this.editing + 1}` : "New rule" });
 		const scale = this.op === "scale";
-		const needsValue = !scale && this.op !== "empty" && this.op !== "notempty";
+		const bar = this.op === "bar";
+		const needsValue = !scale && !bar && this.op !== "empty" && this.op !== "notempty";
 		new Setting(c)
 			.setName("Condition")
 			.addDropdown((d) =>
@@ -5915,6 +5986,7 @@ class RulesModal extends Modal {
 						notempty: "is not empty",
 						regex: "matches pattern",
 						scale: "color scale (min→max)",
+						bar: "data bar",
 					})
 					.setValue(this.op)
 					.onChange((v) => {
@@ -5934,22 +6006,34 @@ class RulesModal extends Modal {
 					.setDisabled(!needsValue)
 					.onChange((v) => (this.value = v));
 			});
-		c.createDiv({ cls: "ptb-label", text: scale ? "Low fill (column minimum)" : "Cell fill" });
+		if (bar) {
+			c.createEl("p", {
+				cls: "ptb-modal-desc",
+				text:
+					"A bar behind every numeric cell in this column, as long as the value is against the column's largest. " +
+					"It is drawn on screen and never written to the note, so it re-scales itself as values change and as a filter hides rows.",
+			});
+		}
+		c.createDiv({ cls: "ptb-label", text: scale ? "Low fill (column minimum)" : bar ? "Bar color" : "Cell fill" });
 		this.swatchRow(
 			c.createDiv({ cls: "ptb-rule-swatches" }),
-			scale ? ["#FFFFFF", ...this.plugin.palette().slice(8, 16)] : ["#FFFFFF", ...this.plugin.palette().slice(8, 16), null],
+			scale || bar
+				? ["#FFFFFF", ...this.plugin.palette().slice(8, 16)]
+				: ["#FFFFFF", ...this.plugin.palette().slice(8, 16), null],
 			(v) => (this.bg = v),
 			() => this.bg,
 			"No fill: this rule leaves cell fills alone"
 		);
-		c.createDiv({ cls: "ptb-label", text: scale ? "High fill (column maximum)" : "Text color" });
-		this.swatchRow(
-			c.createDiv({ cls: "ptb-rule-swatches" }),
-			scale ? ["#FFFFFF", ...this.plugin.palette().slice(8, 16)] : ["#FFFFFF", ...this.plugin.palette().slice(16, 24), null],
-			(v) => (this.fg = v),
-			() => this.fg,
-			"No text color: this rule leaves text colors alone"
-		);
+		if (!bar) {
+			c.createDiv({ cls: "ptb-label", text: scale ? "High fill (column maximum)" : "Text color" });
+			this.swatchRow(
+				c.createDiv({ cls: "ptb-rule-swatches" }),
+				scale ? ["#FFFFFF", ...this.plugin.palette().slice(8, 16)] : ["#FFFFFF", ...this.plugin.palette().slice(16, 24), null],
+				(v) => (this.fg = v),
+				() => this.fg,
+				"No text color: this rule leaves text colors alone"
+			);
+		}
 		const btns = c.createDiv({ cls: "ptb-modal-btns" });
 		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
 		if (this.editing != null) {
@@ -5963,12 +6047,16 @@ class RulesModal extends Modal {
 				void this.plugin.setColumnRules(next, this.target);
 			});
 		} else {
-			btns.createEl("button", { text: "Apply once" }).addEventListener("click", () => {
-				const rule = this.currentRule();
-				if (!rule) return;
-				this.close();
-				void this.plugin.applyRule(rule, this.target);
-			});
+			// A bar is drawn rather than painted in, so there is nothing for
+			// "once" to leave behind: it is a live rule or it is nothing.
+			if (!bar) {
+				btns.createEl("button", { text: "Apply once" }).addEventListener("click", () => {
+					const rule = this.currentRule();
+					if (!rule) return;
+					this.close();
+					void this.plugin.applyRule(rule, this.target);
+				});
+			}
 			btns.createEl("button", { text: "Add rule", cls: "mod-cta" }).addEventListener("click", () => {
 				const rule = this.currentRule();
 				if (!rule) return;
@@ -5987,6 +6075,13 @@ class RulesModal extends Modal {
 				return null;
 			}
 			return { op: "scale", value: `${this.bg}~${this.fg}`, bg: null, fg: null };
+		}
+		if (this.op === "bar") {
+			if (!this.bg) {
+				new Notice("Pick a color for the bar.");
+				return null;
+			}
+			return { op: "bar", value: this.bg, bg: null, fg: null };
 		}
 		if (this.op === "between") {
 			const v = this.value.replace(/\s+(?:to|–|—)\s+/i, "~");
