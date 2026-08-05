@@ -67,8 +67,14 @@ import {
 	parseNumeric,
 	parseTimeCell,
 	planBorders,
+	planCopyCells,
 	planDrawBorders,
 	planFill,
+	planPasteCells,
+	clipFromRows,
+	clipToTsv,
+	CellClip,
+	PasteMode,
 	planFormatCells,
 	planMulti,
 	planStickyFormat,
@@ -487,6 +493,13 @@ export default class PowerTablesPlugin extends Plugin {
 	private statsSum!: HTMLElement;
 	/** Selection snapshot backing the stats chip; the Insert press consumes it. */
 	private statsSel: ReturnType<PowerTablesPlugin["widgetSelection"]> = null;
+	/** The last block copied or cut from a table, and the plain text that went to
+	 *  the system clipboard alongside it. The text is how a paste tells our own
+	 *  copy from anything the user has copied since: matching text means the rich
+	 *  block is still what the clipboard is describing, and anything else is
+	 *  somebody else's data that has to land as values. */
+	private clip: CellClip | null = null;
+	private clipText = "";
 	fmtModal: FormatCellsModal | null = null;
 	private hiderView = buildTagHider(this);
 	private hiderExtension = [hiderInstalled.of(true), this.hiderView];
@@ -522,6 +535,33 @@ export default class PowerTablesPlugin extends Plugin {
 			id: "fill-right", icon: "arrow-right-to-line",
 			name: "Fill right",
 			callback: () => void this.fill("right"),
+		});
+		this.addCommand({ id: "copy-cells", icon: "copy", name: "Copy cells", callback: () => void this.copyCells() });
+		this.addCommand({ id: "cut-cells", icon: "scissors", name: "Cut cells", callback: () => void this.copyCells(true) });
+		this.addCommand({
+			id: "paste-cells", icon: "clipboard-paste",
+			name: "Paste cells",
+			callback: () => void this.pasteCells(),
+		});
+		this.addCommand({
+			id: "paste-values", icon: "hash",
+			name: "Paste special: values",
+			callback: () => void this.pasteCells("values"),
+		});
+		this.addCommand({
+			id: "paste-formulas", icon: "function-square",
+			name: "Paste special: formulas",
+			callback: () => void this.pasteCells("formulas"),
+		});
+		this.addCommand({
+			id: "paste-formats", icon: "paintbrush",
+			name: "Paste special: formats",
+			callback: () => void this.pasteCells("formats"),
+		});
+		this.addCommand({
+			id: "paste-transpose", icon: "flip-horizontal-2",
+			name: "Paste special: transpose",
+			callback: () => void this.pasteCells("all", true),
 		});
 		this.addCommand({
 			id: "text-last", icon: "type",
@@ -821,6 +861,12 @@ export default class PowerTablesPlugin extends Plugin {
 			if (evt.target instanceof Element && evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.updatePanels();
 		});
 		this.registerPenHandlers();
+		// Ctrl+C / Ctrl+X / Ctrl+V over a table selection. Capture, because the
+		// editor's own handlers would otherwise get there first and paste our
+		// markup as text.
+		this.registerDomEvent(document, "copy", (evt) => this.onClipboardCopy(evt, false), { capture: true });
+		this.registerDomEvent(document, "cut", (evt) => this.onClipboardCopy(evt, true), { capture: true });
+		this.registerDomEvent(document, "paste", (evt) => this.onClipboardPaste(evt), { capture: true });
 		this.registerDomEvent(document, "keyup", (evt) => {
 			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(evt.key)) {
 				// moving the cursor by keyboard is also a new selection, and it
@@ -1778,6 +1824,13 @@ export default class PowerTablesPlugin extends Plugin {
 
 	private addStructureItems(menu: Menu, cell: HTMLTableCellElement | null = null) {
 		const run = (fn: () => unknown) => void this.withCell(cell, fn);
+		menu.addItem((i) => i.setTitle("Copy cells").setIcon("copy").onClick(() => run(() => this.copyCells())));
+		menu.addItem((i) => i.setTitle("Cut cells").setIcon("scissors").onClick(() => run(() => this.copyCells(true))));
+		menu.addItem((i) => i.setTitle("Paste cells").setIcon("clipboard-paste").onClick(() => run(() => this.pasteCells())));
+		menu.addItem((i) =>
+			i.setTitle("Paste special…").setIcon("clipboard-list").onClick((e) => this.showPasteMenu(e as MouseEvent, cell))
+		);
+		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Insert row above").setIcon("arrow-up").onClick(() => run(() => this.insertRow("above"))));
 		menu.addItem((i) => i.setTitle("Insert row below").setIcon("arrow-down").onClick(() => run(() => this.insertRow("below"))));
 		menu.addItem((i) => i.setTitle("Insert column left").setIcon("arrow-left").onClick(() => run(() => this.insertColumn("left"))));
@@ -3066,6 +3119,151 @@ export default class PowerTablesPlugin extends Plugin {
 		new Notice(`Filled ${plan.filled} cell${plan.filled === 1 ? "" : "s"} ${dir}.`);
 	}
 
+	/** The cells a copy or a paste acts on: the drag selection if there is one,
+	 *  otherwise the single targeted cell. */
+	private clipTargets(): { where: { path: string; editor: Editor | null; fromCursor: boolean }; targets: { line: number; col: number }[] } | null {
+		const sel = this.widgetSelection();
+		if (sel) {
+			return { where: { path: sel.path, editor: sel.editor, fromCursor: false }, targets: sel.targets };
+		}
+		const t = this.resolveTarget();
+		if (!t) return null;
+		return { where: t, targets: [{ line: t.line, col: t.col }] };
+	}
+
+	/**
+	 * Take the selected block. The rich clip stays here, where formulas and
+	 * formatting survive; the plain text goes to the system clipboard so the
+	 * same Ctrl+C also lands in Excel, Sheets or anywhere else.
+	 */
+	async copyCells(cut = false, data?: DataTransfer | null) {
+		const at = this.clipTargets();
+		if (!at) return;
+		const ed = at.where.editor ?? this.editorForPath(at.where.path);
+		if (!ed) {
+			new Notice("Power Tables: open the note in editing mode to copy cells.");
+			return;
+		}
+		const clip = planCopyCells(ed.getValue().split("\n"), at.targets, { cut, path: at.where.path });
+		if (!clip) {
+			this.cantLocate();
+			return;
+		}
+		this.clip = clip;
+		this.clipText = clipToTsv(clip);
+		if (data) data.setData("text/plain", this.clipText);
+		else await navigator.clipboard.writeText(this.clipText);
+		const n = clip.rows.length * (clip.rows[0]?.length ?? 0);
+		new Notice(
+			cut
+				? `${n} cell${n === 1 ? "" : "s"} cut. They clear where they are when the paste lands.`
+				: `${n} cell${n === 1 ? "" : "s"} copied.`
+		);
+	}
+
+	/**
+	 * Put a block back down, with its top-left on the targeted cell.
+	 *
+	 * `text` is what the system clipboard holds. When it is what our own copy
+	 * put there the rich block lands, formulas and formatting included; when it
+	 * is anything else it came from outside and lands as values, which is the
+	 * only thing tab-separated text can honestly carry.
+	 */
+	async pasteCells(mode: PasteMode = "all", transpose = false, text?: string | null) {
+		const at = this.clipTargets();
+		if (!at) return;
+		const incoming = text ?? (await navigator.clipboard.readText());
+		let clip = this.clip && incoming.trim() === this.clipText.trim() ? this.clip : null;
+		if (!clip) {
+			const rows = parseDelimited(incoming ?? "");
+			clip = rows.length ? clipFromRows(rows) : null;
+		}
+		if (!clip) {
+			new Notice("Power Tables: nothing to paste. Copy some cells first.");
+			return;
+		}
+		// A cut only takes its source with it inside the file it was cut from:
+		// the plan can only see one document, and a move across two of them
+		// would clear cells nothing here is holding open.
+		const moving = clip.cut && clip.path === at.where.path;
+		const use = moving ? clip : { ...clip, cut: false };
+		const plan = await this.runPlan(at.where, (lines) => planPasteCells(lines, at.targets, use, mode, transpose));
+		if (!plan) {
+			this.cantLocate();
+			return;
+		}
+		// a cut is spent once it lands, the way Excel's marching ants stop
+		if (moving && plan.cleared) this.clip = { ...clip, cut: false };
+		const bits = [`Pasted ${plan.pasted} cell${plan.pasted === 1 ? "" : "s"}`];
+		if (plan.added) bits.push(`${plan.added} row${plan.added === 1 ? "" : "s"} added`);
+		if (plan.cleared) bits.push("source cleared");
+		if (clip.cut && !moving) bits.push("cut left in place, it came from another note");
+		if (plan.clamped) bits.push(`${plan.clamped} past the last column dropped`);
+		new Notice(bits.join(", ") + ".");
+	}
+
+	/** Excel's Paste Special menu. The cell is threaded through because this
+	 *  menu is raised from another one, by which point the right-clicked cell is
+	 *  no longer whatever happens to be focused. */
+	showPasteMenu(evt: MouseEvent, cell: HTMLTableCellElement | null = null) {
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Paste special").setIsLabel(true));
+		const items: [string, string, PasteMode, boolean][] = [
+			["All", "clipboard-paste", "all", false],
+			["Values", "hash", "values", false],
+			["Formulas", "function-square", "formulas", false],
+			["Formats", "paintbrush", "formats", false],
+			["Transpose", "flip-horizontal-2", "all", true],
+		];
+		for (const [label, icon, mode, transpose] of items) {
+			menu.addItem((i) =>
+				i
+					.setTitle(label)
+					.setIcon(icon)
+					.onClick(() => void this.withCell(cell, () => this.pasteCells(mode, transpose)))
+			);
+		}
+		menu.showAtPosition(this.menuAnchor(evt));
+	}
+
+	/**
+	 * Ctrl+C / Ctrl+X over a live multi-cell selection.
+	 *
+	 * Only a live selection counts, never the remembered one: the sticky
+	 * selection exists so a run of toolbar presses keeps meaning the same cells,
+	 * and reading it here would hijack a copy the user aimed at something else
+	 * entirely. A focused text field is left alone for the same reason.
+	 */
+	private onClipboardCopy(evt: ClipboardEvent, cut: boolean) {
+		if (evt.target instanceof HTMLInputElement || evt.target instanceof HTMLTextAreaElement) return;
+		if (!this.readWidgetSelection()) return;
+		evt.preventDefault();
+		evt.stopPropagation();
+		void this.copyCells(cut, evt.clipboardData);
+	}
+
+	/**
+	 * Ctrl+V into a table.
+	 *
+	 * Two things are worth taking over from the editor's own paste, and nothing
+	 * else is: our own copied block, which would otherwise land as raw markup,
+	 * and a grid of tab or newline separated text, which would otherwise pile
+	 * into one cell. A single value pasted into a cell is exactly what Obsidian
+	 * already does well, so it goes straight through.
+	 */
+	private onClipboardPaste(evt: ClipboardEvent) {
+		if (evt.target instanceof HTMLInputElement || evt.target instanceof HTMLTextAreaElement) return;
+		const text = evt.clipboardData?.getData("text/plain") ?? "";
+		if (!text.trim()) return;
+		const ours = !!this.clip && text.trim() === this.clipText.trim();
+		if (!ours && !/[\t\n]/.test(text.trim())) return;
+		const inTable = evt.target instanceof HTMLElement && !!evt.target.closest("table");
+		if (!inTable && !this.readWidgetSelection()) return;
+		evt.preventDefault();
+		evt.stopPropagation();
+		void this.pasteCells("all", false, text);
+	}
+
 	async calcInto(spec: CalcSpec) {
 		// Excel-style AutoSum: with a drag selection, the function runs over the
 		// selected range and lands in its empty cell (or the one just below).
@@ -3229,7 +3427,11 @@ export default class PowerTablesPlugin extends Plugin {
 		const items: [string, string, (e: MouseEvent) => void][] = [
 			["Fill down", "arrow-down-to-line", () => void this.fill("down")],
 			["Fill right", "arrow-right-to-line", () => void this.fill("right")],
-			["Import…", "clipboard-paste", () => this.openImportModal()],
+			["Copy cells", "copy", () => void this.copyCells()],
+			["Cut cells", "scissors", () => void this.copyCells(true)],
+			["Paste cells", "clipboard-paste", () => void this.pasteCells()],
+			["Paste special…", "clipboard-list", (e: MouseEvent) => this.showPasteMenu(e)],
+			["Import…", "upload", () => this.openImportModal()],
 			["Paste rows", "clipboard", () => void this.pasteFromClipboard()],
 			["Copy as CSV", "copy", () => void this.copyTableCsv()],
 			["Color rules…", "wand-2", () => this.openRulesModal()],
@@ -4325,10 +4527,22 @@ class PanelUI {
 		this.dataBtn(dgrid, "Fill →", "Copy the left of the selection right, adjusting references", () =>
 			void this.plugin.fill("right")
 		);
+		this.dataBtn(dgrid, "Copy", "Copy the selected cells, formulas and formatting included", () =>
+			void this.plugin.copyCells()
+		);
+		this.dataBtn(dgrid, "Cut", "Cut the selected cells; they clear when the paste lands", () =>
+			void this.plugin.copyCells(true)
+		);
+		this.dataBtn(dgrid, "Paste", "Put the copied block down with its top-left on the targeted cell", () =>
+			void this.plugin.pasteCells()
+		);
+		this.dataBtn(dgrid, "Paste…", "Paste special: values, formulas, formats or transposed", (e) =>
+			this.plugin.showPasteMenu(e)
+		);
 		this.dataBtn(dgrid, "+ Row", "Insert row below", () => void this.plugin.insertRow("below"));
 		this.dataBtn(dgrid, "+ Column", "Insert column right", () => void this.plugin.insertColumn("right"));
 		this.dataBtn(dgrid, "Import…", "Paste CSV or Excel data into this table", () => this.plugin.openImportModal());
-		this.dataBtn(dgrid, "Paste", "Append rows from the clipboard (Excel, Sheets, or CSV)", () =>
+		this.dataBtn(dgrid, "Append rows", "Add the clipboard's rows to the bottom of the table (Excel, Sheets, or CSV)", () =>
 			void this.plugin.pasteFromClipboard()
 		);
 		this.dataBtn(dgrid, "Totals row", "Append a Total row with a live sum under every numeric column", () =>
