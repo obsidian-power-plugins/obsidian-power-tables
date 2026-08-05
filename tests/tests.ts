@@ -93,6 +93,9 @@ import {
 	planClearFilters,
 	filteredRows,
 	barPercents,
+	summarizeRows,
+	planSummarize,
+	SummaryFn,
 	iconBands,
 	listTag,
 	listValues,
@@ -1239,6 +1242,62 @@ const pasted = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }],
 ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as plain values");
 eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
 eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
+
+// --- summarize ---
+const SUMT = [
+	"| Region | Rep | Amount |",
+	"| - | - | - |",
+	"| West | Bob | $250.00 |",
+	"| East | Ann | $100.00 |",
+	"| East | Bob | $300.00 |",
+	"| West | Ann | $50.00 |",
+	"| East | Ann | $75.00 |",
+];
+const SUMTGT = { line: 2, col: 0, expect: null };
+const sumRows = (fn: SummaryFn) =>
+	summarizeRows(
+		[
+			["West", "Bob", "250"],
+			["East", "Ann", "100"],
+			["East", "Bob", "300"],
+			["West", "Ann", "50"],
+		],
+		0,
+		2,
+		fn
+	)
+		.map((g) => `${g.label}=${g.value}`)
+		.join(" ");
+eq(sumRows("sum"), "West=300 East=400", "groups come back in the order they first appear, not sorted");
+eq(sumRows("count"), "West=2 East=2", "count counts the rows in each group");
+eq(sumRows("avg"), "West=150.00 East=200.00", "average carries two decimals even when the inputs had none");
+eq(sumRows("min"), "West=50 East=100", "min and max read the group's own range");
+eq(sumRows("max"), "West=250 East=300", "the other end of it");
+
+const summed = applyPlan(SUMT, planSummarize(SUMT.slice(), SUMTGT, 0, 2, "sum"));
+eq(summed[8], "| Region | Sum of Amount |", "the summary names the column it grouped and what it did to the other");
+eq(summed[10], "| West | $300.00 |", "the first group is the one that appeared first, and holds every row of it");
+eq(summed[11], "| East | $475.00 |", "and its total carries the currency the column was written in");
+eq(summed[12], "| **Total** | $775.00 |", "with a grand total under them");
+ok(summed[7] === "", "the summary is separated from the table it came from");
+eq(summed.length, SUMT.length + 6, "and is inserted whole, below it");
+
+// the grand total is computed over the rows, not over the group answers, which
+// is the same thing for a sum and is not for a mean
+const uneven = [
+	"| G | V |",
+	"| - | - |",
+	"| a | 10 |",
+	"| a | 20 |",
+	"| b | 60 |",
+];
+const avgd = applyPlan(uneven, planSummarize(uneven.slice(), { line: 2, col: 0, expect: null }, 0, 1, "avg"));
+eq(avgd[8], "| a | 15.00 |", "a two-row group averages its own two rows");
+eq(avgd[10], "| **Total** | 30.00 |", "and the total is the mean of all three rows, not the mean of the two group means");
+
+const blanks = ["| G | V |", "| - | - |", "| | 5 |", "| a | 7 |"];
+ok(applyPlan(blanks, planSummarize(blanks.slice(), { line: 2, col: 0, expect: null }, 0, 1, "sum"))[7].includes("(blank)"), "rows with nothing in the grouping column group together under a name that says so");
+eq(planSummarize(SUMT.slice(), SUMTGT, 0, 9, "sum"), null, "a column that is not there is not something to summarize");
 
 // --- multi-criteria functions ---
 // region, rep, amount, status

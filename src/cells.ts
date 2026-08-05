@@ -5344,6 +5344,132 @@ export function planPasteCells(
 	};
 }
 
+/* ---------------- summarize: a pivot whose output is an ordinary table ---------------- */
+
+export type SummaryFn = "sum" | "count" | "avg" | "min" | "max";
+
+const SUMMARY_LABEL: Record<SummaryFn, string> = {
+	sum: "Sum",
+	count: "Count",
+	avg: "Average",
+	min: "Min",
+	max: "Max",
+};
+
+/**
+ * One group's answer, formatted the way its inputs were written.
+ *
+ * A column of dollars summarises to dollars and a column of two-decimal figures
+ * keeps two, because a summary that changed the units would have to be read
+ * twice to be believed. Count is always a bare integer: it counts rows, and
+ * rows are not money.
+ */
+function aggregate(values: string[], fn: SummaryFn): string {
+	if (fn === "count") return String(values.filter((v) => v.trim() !== "").length);
+	const nums = values.map(parseNumeric).filter((n): n is NonNullable<typeof n> => !!n);
+	if (!nums.length) return "";
+	let decimals = 0;
+	for (const n of nums) decimals = Math.max(decimals, n.decimals);
+	decimals = Math.min(decimals, 4);
+	const currency = nums.every((n) => n.currency && n.currency === nums[0].currency) ? nums[0].currency : "";
+	const fmt = (v: number, dec: number) => (v < 0 ? "-" : "") + currency + Math.abs(v).toFixed(dec);
+	const vals = nums.map((n) => n.value);
+	if (fn === "min") return fmt(Math.min(...vals), decimals);
+	if (fn === "max") return fmt(Math.max(...vals), decimals);
+	const total = vals.reduce((a, b) => a + b, 0);
+	if (fn === "sum") return fmt(total, decimals);
+	return fmt(total / vals.length, Math.min(4, Math.max(decimals, 2)));
+}
+
+/**
+ * Group rows by one column and aggregate another.
+ *
+ * Groups come back in the order they first appear rather than sorted, which is
+ * the one choice here that is not Excel's. A table is usually already in an
+ * order somebody meant, months or stages or priority, and sorting the summary
+ * alphabetically would throw that away to no purpose; sorting it afterwards is
+ * one click away if it was not meant.
+ */
+export function summarizeRows(
+	rows: string[][],
+	groupCol: number,
+	valueCol: number,
+	fn: SummaryFn
+): { label: string; value: string }[] {
+	const order: string[] = [];
+	const buckets = new Map<string, string[]>();
+	for (const r of rows) {
+		// The label is normalized and the values are not, which is the whole
+		// division: a label is text and reads better without its markup, while a
+		// value still has to be parsed, and normalizeText strips the currency
+		// symbol that says what the number is.
+		const key = normalizeText(r[groupCol] ?? "").trim();
+		if (!buckets.has(key)) {
+			buckets.set(key, []);
+			order.push(key);
+		}
+		buckets.get(key)!.push(r[valueCol] ?? "");
+	}
+	return order.map((label) => ({ label, value: aggregate(buckets.get(label)!, fn) }));
+}
+
+/**
+ * Write a summary of the targeted table as a new table below it.
+ *
+ * The output is an ordinary Markdown table and nothing marks it as generated,
+ * which is deliberate for a first cut: it means every other feature here works
+ * on it the moment it lands, and it means there is no stale link to a source
+ * table that has since been edited. The cost is that it is a snapshot, and
+ * refreshing it is running this again and deleting the old one.
+ */
+export function planSummarize(
+	lines: string[],
+	target: CellTargetLoc,
+	groupCol: number,
+	valueCol: number,
+	fn: SummaryFn
+): (EditPlan & { groups: number }) | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const { start, end, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const hr = parseRow(lines[start]);
+	if (!hr || hr.isDelim) return null;
+	if (groupCol >= hr.cellCount || valueCol >= hr.cellCount) return null;
+
+	const body: string[][] = [];
+	for (let i = delimIdx + 1; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (!r || r.isDelim) continue;
+		body.push(Array.from({ length: r.cellCount }, (_, c) => parseCellContent(r.pieces[c + 1]).inner));
+	}
+	const groups = summarizeRows(body, groupCol, valueCol, fn);
+	if (!groups.length) return null;
+
+	const head = (c: number) => normalizeText(parseCellContent(hr.pieces[c + 1]).inner).trim() || colLetterOf(c);
+	const title = `${SUMMARY_LABEL[fn]} of ${head(valueCol)}`;
+	// The total is computed over every row rather than from the group answers,
+	// which is the same thing for Sum and is not for Average: the mean of a set
+	// of means is only the mean when the groups are the same size.
+	const total = aggregate(
+		body.map((r) => r[valueCol] ?? ""),
+		fn
+	);
+	const out = [
+		"",
+		`| ${csvCell(head(groupCol))} | ${csvCell(title)} |`,
+		"| --- | ---: |",
+		...groups.map((g) => `| ${csvCell(g.label || "(blank)")} | ${csvCell(g.value)} |`),
+		`| **Total** | ${csvCell(total)} |`,
+	];
+	return {
+		edits: out.map((text) => ({ line: end + 1, text, kind: "insert" as EditKind })),
+		cursorLine: end + 2,
+		cursorCh: 2,
+		groups: groups.length,
+	};
+}
+
 export function planPrettify(lines: string[], target: CellTargetLoc): (EditPlan & { rows: number }) | null {
 	const ln = locateLine(lines, target);
 	if (ln == null) return null;
