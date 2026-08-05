@@ -671,11 +671,13 @@ tr.ptb-fhidden {
    fill of its own still shows it behind the bar rather than losing it. The bar
    is drawn from the inline --ptb-bar the render pass sets; without the plugin
    there is no variable, no class and no bar, and the number is simply a number. */
-.ptb-bar {
+/* ptb-databar, not ptb-bar: that one is the toolbar, and a cell wearing it
+   inherited display:flex and collapsed to a strip. */
+.ptb-databar {
 	background-image: linear-gradient(
 		to right,
-		var(--ptb-bar-color) 0 var(--ptb-bar),
-		transparent var(--ptb-bar)
+		var(--ptb-databar-color) 0 var(--ptb-databar),
+		transparent var(--ptb-databar)
 	);
 	background-repeat: no-repeat;
 }
@@ -685,8 +687,20 @@ tr.ptb-fhidden {
    the cell would land in its textContent, and textContent is what the filters,
    the data bars and the dropdown's value list all read. A ::before is invisible
    to all of them, and to anyone opening the note without the plugin. */
+/* Positioned rather than left inline, because Live Preview renders a cell's
+   content inside a block of its own and an inline ::before ahead of a block
+   lands on its own line above the value. Absolute is the same answer the funnel
+   and the picker chevron already use, and it holds in both views. */
+[data-ptb-icon] {
+	position: relative;
+	padding-left: 20px;
+}
+
 [data-ptb-icon]::before {
-	margin-right: 5px;
+	position: absolute;
+	top: 50%;
+	left: 5px;
+	transform: translateY(-50%);
 	font-size: 0.85em;
 	line-height: 1;
 }

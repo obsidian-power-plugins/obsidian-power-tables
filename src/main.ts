@@ -1052,7 +1052,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.closeFilterMenu();
 		document.body.querySelectorAll(".ptb-funnel, .ptb-drop").forEach((f) => f.remove());
 		document.body.querySelectorAll(".ptb-hasdrop").forEach((c) => (c as HTMLElement).removeClass("ptb-hasdrop"));
-		document.body.querySelectorAll(".ptb-bar, [data-ptb-icon]").forEach((c) => this.clearVisuals(c as HTMLElement));
+		document.body.querySelectorAll(".ptb-databar, [data-ptb-icon]").forEach((c) => this.clearVisuals(c as HTMLElement));
 		document.body.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
 			(cell as HTMLElement).style.removeProperty("background-color");
@@ -1696,8 +1696,8 @@ export default class PowerTablesPlugin extends Plugin {
 					};
 				});
 				if (!specs.some((s) => s.bar || s.icon)) {
-					if (tbl.querySelector(".ptb-bar, [data-ptb-icon]")) {
-						tbl.querySelectorAll(".ptb-bar, [data-ptb-icon]").forEach((c) => this.clearVisuals(c as HTMLElement));
+					if (tbl.querySelector(".ptb-databar, [data-ptb-icon]")) {
+						tbl.querySelectorAll(".ptb-databar, [data-ptb-icon]").forEach((c) => this.clearVisuals(c as HTMLElement));
 					}
 					return;
 				}
@@ -1722,11 +1722,11 @@ export default class PowerTablesPlugin extends Plugin {
 						if (pct == null) this.clearBar(cell);
 						else {
 							const width = `${pct}%`;
-							if (cell.style.getPropertyValue("--ptb-bar") !== width) cell.style.setProperty("--ptb-bar", width);
-							if (cell.style.getPropertyValue("--ptb-bar-color") !== specs[c].bar) {
-								cell.style.setProperty("--ptb-bar-color", specs[c].bar as string);
+							if (cell.style.getPropertyValue("--ptb-databar") !== width) cell.style.setProperty("--ptb-databar", width);
+							if (cell.style.getPropertyValue("--ptb-databar-color") !== specs[c].bar) {
+								cell.style.setProperty("--ptb-databar-color", specs[c].bar as string);
 							}
-							if (!cell.hasClass("ptb-bar")) cell.addClass("ptb-bar");
+							if (!cell.hasClass("ptb-databar")) cell.addClass("ptb-databar");
 						}
 						const band = bands?.[i];
 						// The glyph is CSS generated content, keyed off this
@@ -1744,10 +1744,10 @@ export default class PowerTablesPlugin extends Plugin {
 	}
 
 	private clearBar(cell: HTMLElement) {
-		if (!cell.hasClass("ptb-bar")) return;
-		cell.removeClass("ptb-bar");
-		cell.style.removeProperty("--ptb-bar");
-		cell.style.removeProperty("--ptb-bar-color");
+		if (!cell.hasClass("ptb-databar")) return;
+		cell.removeClass("ptb-databar");
+		cell.style.removeProperty("--ptb-databar");
+		cell.style.removeProperty("--ptb-databar-color");
 	}
 
 	private clearVisuals(cell: HTMLElement) {
