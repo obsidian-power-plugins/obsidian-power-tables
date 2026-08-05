@@ -25,6 +25,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Sorting that understands numbers, currency, and dates; row and column moves; insert, delete, duplicate
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
+- Data validation: give a column its list of values and every cell gets a picker, so a status column is a click
 - Excel's AutoFilter: a funnel on every column header, ticking values or taking a condition, stored in the note so a filtered view is still there tomorrow
 - CSV/Excel import and export, table prettifier, Excel-style cell reference guides that select the column or row they label
 - Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
@@ -139,6 +140,18 @@ Select a block and press **Ctrl+C**, then click where it should go and press **C
 
 Column widths, conditional color rules and per-table appearance flags never travel: they describe the column rather than the cell that landed in it, which is the same division Fill down makes.
 
+### Data validation (a column's list of values)
+
+Give a column the values it is allowed to hold, and every cell in it gets a chevron that offers them. A status column becomes a click instead of a retype, and stops growing both `Done` and `done`.
+
+Open it with **Data validation…** (the panel's Data section as **List…**, the command palette, or the table menu), type one value per line, and Save. **From column** fills the box with what the column already holds, which is usually the fastest way in: seed it, delete the two typos, save.
+
+- The chevron sits beside the cell's own content, so colors, number formats and everything else the cell is wearing stay exactly as they were.
+- **Values off the list are still allowed.** Markdown is the source of truth and a note edited on another device, or by another plugin, can hold whatever it likes; a list that refused those would be lying about what it controls. What it does is put the right values one click away. If you want the strays to stand out, a conditional color rule with `matches pattern` will mark them.
+- The list is stored as `data-list` on the column's header cell, beside the width, the color rules and the filter, so it travels with the file and survives sorts and column moves. **Remove list** takes it off.
+
+It pairs with [AutoFilter](#autofilter): a column with a fixed vocabulary is exactly the column worth filtering by value, and a list keeps that value list short and clean.
+
 ### AutoFilter
 
 Turn it on (Settings → **AutoFilter**, or the panel's **View → Filter** for one table) and every column header grows Excel's funnel button. Click it for that column's dropdown:
@@ -239,7 +252,7 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 
 **Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
 
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*.
+Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*, *Data validation (column list)…*.
 
 ### On mobile
 
