@@ -13,7 +13,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 
 ## Features at a glance
 
-- Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column
+- Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column; color scales and data bars
 - Live totals and Excel-style formulas: 42 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
@@ -223,6 +223,16 @@ The **formula bar completes function names** as you type: `=VL` offers `VLOOKUP`
 ### Conditional color rules
 
 **Rules…** (sidebar or command palette) colors cells in the targeted column by condition: pick an operator (greater than / less than / equals / contains / between / is empty / is not empty / matches pattern), a value where the condition needs one (`between` takes `10 ~ 20`; patterns are case-insensitive regular expressions), and fill/text colors. Classic use: negatives in red (`less than 0` gives red text). The **color scale (min→max)** condition is different: it tints every numeric cell between two fills by where its value sits in the column's range. Pick the low and high colors where the color rows normally are, and the gradient re-shades live as values change. **Apply once** paints the matches now and stores nothing; **Add rule** stores the rule on the column's header cell and re-applies it automatically as values change. A column can hold several rules: they are checked top to bottom and the first match colors the cell, so put the more specific condition first. Colors you set by hand on individual cells always win over rules. Reopen **Rules…** on any cell in the column to see its rules and edit or remove them (removing a rule leaves the colors it already painted). Rules live per column, so every column of every table can have its own set. The dialog floats, so drag it by its title if it covers your table.
+
+### Data bars
+
+The **data bar** condition in the same dialog draws a bar behind every numeric cell in the column, as long as the value is against the column's largest. Pick a color, **Add rule**, and the column reads as a chart without stopping being a table.
+
+**The baseline is zero** whenever the column holds no negatives, which is nearly always. That is what a bar is read as: half the length means half the value, and 99 and 100 look nearly the same because they nearly are. Excel's automatic rule instead stretches the smallest value to a stub and the largest to full width, which makes those two look like nothing and everything. A column that does hold negatives has no honest zero to measure from, so that one spans its own range instead.
+
+**Nothing is written to the note.** This is the one conditional format that is drawn rather than stored, and deliberately: a color survives the plugin being uninstalled and is worth writing into the cell for that, but a bar cannot survive it at all, so storing one would buy nothing and would rewrite every cell of the column each time any value in it changed. The rule itself still lives on the header cell like every other, so it travels with the file.
+
+Because it is measured at render time it keeps up with everything: edit a value and the column re-scales, and **filter the table and the bars re-scale to the rows that are left** rather than to rows nobody can see. A cell with nothing numeric in it gets no bar, and a cell that carries a fill of its own keeps it, behind the bar. Bars sit alongside the other rules on a column: the bar never counts as a match, so the conditions under it still run.
 
 ### Format painter
 
