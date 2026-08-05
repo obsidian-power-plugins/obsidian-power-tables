@@ -1,7 +1,7 @@
 {
 	"id": "powertables",
 	"name": "Power Tables",
-	"version": "1.53.4",
+	"version": "1.54.0",
 	"minAppVersion": "1.7.2",
 	"description": "Color, calculate, and sort Markdown tables in place: cell fills and text colors, live formulas that recalculate, and column sorting, all stored as plain Markdown.",
 	"author": "Power Plugins",
