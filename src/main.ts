@@ -77,6 +77,9 @@ import {
 	columnListAt,
 	columnDistinct,
 	barPercents,
+	iconBands,
+	ICON_SETS,
+	IconSet,
 	parseRuleTags,
 	listValues,
 	edgeInDirection,
@@ -1049,7 +1052,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.closeFilterMenu();
 		document.body.querySelectorAll(".ptb-funnel, .ptb-drop").forEach((f) => f.remove());
 		document.body.querySelectorAll(".ptb-hasdrop").forEach((c) => (c as HTMLElement).removeClass("ptb-hasdrop"));
-		document.body.querySelectorAll(".ptb-bar").forEach((c) => this.clearBar(c as HTMLElement));
+		document.body.querySelectorAll(".ptb-bar, [data-ptb-icon]").forEach((c) => this.clearVisuals(c as HTMLElement));
 		document.body.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
 			(cell as HTMLElement).style.removeProperty("background-color");
@@ -1106,7 +1109,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.renderCheckboxes();
 		this.renderFunnels();
 		this.renderDrops();
-		this.renderDataBars();
+		this.renderCellVisuals();
 		this.renderGuides();
 		this.renderFillHandle();
 	}
@@ -1662,59 +1665,79 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 	}
 
-	/* ---------------- data bars ---------------- */
+	/* ---------------- data bars and icon sets ---------------- */
 
 	/**
-	 * Draw each column that has a bar rule.
+	 * Draw the conditional formats that are drawn rather than stored.
 	 *
 	 * Unlike the color-scale rule, which writes a resolved color into every
-	 * cell, nothing is written to the note here. A color survives the plugin
-	 * being removed and is worth storing for that; a bar cannot survive it at
-	 * all, so storing one would buy nothing and rewrite every cell of the column
-	 * each time any value in it changed.
+	 * cell, nothing here is written to the note. A color survives the plugin
+	 * being removed and is worth storing for that; neither a bar nor an icon can
+	 * survive it at all, so storing one would buy nothing and would rewrite
+	 * every cell of the column each time any value in it changed.
 	 *
-	 * The lengths are measured over the rows on screen, so filtering a column
-	 * re-scales the bars to what is left rather than to rows nobody can see.
+	 * Both are measured over the rows on screen, so filtering a column re-scales
+	 * them to what is left rather than to rows nobody can see. They share this
+	 * pass because they need the same three things: the column's rule, its
+	 * visible cells, and the numbers in them.
 	 */
-	private renderDataBars() {
+	private renderCellVisuals() {
 		document.body
 			.querySelectorAll<HTMLTableElement>(":is(.markdown-rendered, .cm-table-widget) table")
 			.forEach((tbl) => {
 				const head = tbl.rows[0];
 				if (!head) return;
-				const colors = Array.from(head.cells).map((c) => {
+				const specs = Array.from(head.cells).map((c) => {
 					const tag = c.querySelector<HTMLElement>("span.ptb[data-rule]")?.getAttribute("data-rule");
-					return tag ? (parseRuleTags(tag).find((r) => r.op === "bar")?.value ?? null) : null;
+					const rules = tag ? parseRuleTags(tag) : [];
+					return {
+						bar: rules.find((r) => r.op === "bar")?.value ?? null,
+						icon: rules.find((r) => r.op === "icon")?.value ?? null,
+					};
 				});
-				if (!colors.some(Boolean)) {
-					if (tbl.querySelector(".ptb-bar")) tbl.querySelectorAll(".ptb-bar").forEach((c) => this.clearBar(c as HTMLElement));
+				if (!specs.some((s) => s.bar || s.icon)) {
+					if (tbl.querySelector(".ptb-bar, [data-ptb-icon]")) {
+						tbl.querySelectorAll(".ptb-bar, [data-ptb-icon]").forEach((c) => this.clearVisuals(c as HTMLElement));
+					}
 					return;
 				}
 				const rows = Array.from(tbl.rows)
 					.slice(1)
 					.filter((tr) => !tr.hasClass("ptb-fhidden"));
-				for (let c = 0; c < colors.length; c++) {
+				for (let c = 0; c < specs.length; c++) {
 					const cells = rows.map((tr) => tr.cells[c]).filter(Boolean);
-					if (!colors[c]) {
-						cells.forEach((cell) => this.clearBar(cell));
+					if (!specs[c].bar && !specs[c].icon) {
+						cells.forEach((cell) => this.clearVisuals(cell));
 						continue;
 					}
-					const pcts = barPercents(cells.map((cell) => parseNumeric(cellText(cell))?.value ?? null));
+					const values = cells.map((cell) => parseNumeric(cellText(cell))?.value ?? null);
+					const pcts = specs[c].bar ? barPercents(values) : null;
+					const bands = specs[c].icon ? iconBands(values) : null;
 					cells.forEach((cell, i) => {
-						const pct = pcts[i];
-						if (pct == null) {
-							this.clearBar(cell);
-							return;
+						// every write is guarded against the value already there:
+						// setting an attribute to what it already holds still fires
+						// a mutation record, and the observer that fires would bring
+						// this pass straight back here
+						const pct = pcts?.[i];
+						if (pct == null) this.clearBar(cell);
+						else {
+							const width = `${pct}%`;
+							if (cell.style.getPropertyValue("--ptb-bar") !== width) cell.style.setProperty("--ptb-bar", width);
+							if (cell.style.getPropertyValue("--ptb-bar-color") !== specs[c].bar) {
+								cell.style.setProperty("--ptb-bar-color", specs[c].bar as string);
+							}
+							if (!cell.hasClass("ptb-bar")) cell.addClass("ptb-bar");
 						}
-						// every write is guarded: setting an attribute to the value
-						// it already holds still fires a mutation record, and the
-						// observer that fires would bring us straight back here
-						const width = `${pct}%`;
-						if (cell.style.getPropertyValue("--ptb-bar") !== width) cell.style.setProperty("--ptb-bar", width);
-						if (cell.style.getPropertyValue("--ptb-bar-color") !== colors[c]) {
-							cell.style.setProperty("--ptb-bar-color", colors[c] as string);
+						const band = bands?.[i];
+						// The glyph is CSS generated content, keyed off this
+						// attribute, and not a element in the cell. An injected
+						// span would land in the cell's textContent, which is what
+						// the filters, the bars and the value lists all read.
+						const want = band == null ? null : `${specs[c].icon}-${band}`;
+						if (cell.getAttribute("data-ptb-icon") !== want) {
+							if (want) cell.setAttribute("data-ptb-icon", want);
+							else cell.removeAttribute("data-ptb-icon");
 						}
-						if (!cell.hasClass("ptb-bar")) cell.addClass("ptb-bar");
 					});
 				}
 			});
@@ -1725,6 +1748,11 @@ export default class PowerTablesPlugin extends Plugin {
 		cell.removeClass("ptb-bar");
 		cell.style.removeProperty("--ptb-bar");
 		cell.style.removeProperty("--ptb-bar-color");
+	}
+
+	private clearVisuals(cell: HTMLElement) {
+		this.clearBar(cell);
+		if (cell.hasAttribute("data-ptb-icon")) cell.removeAttribute("data-ptb-icon");
 	}
 
 	/* ---------------- data validation (the column's list, as a picker) ---------------- */
@@ -5880,6 +5908,7 @@ const RULE_OP_LABEL: Record<RuleOp, string> = {
 	regex: "matches",
 	scale: "color scale (min→max)",
 	bar: "data bar",
+	icon: "icon set",
 };
 
 class RulesModal extends Modal {
@@ -5954,6 +5983,9 @@ class RulesModal extends Modal {
 						this.bg = sc?.[0] ?? null;
 						this.fg = sc?.[1] ?? null;
 					}
+					// a bar keeps its one color there too, and without this the
+					// picker opens empty and refuses to save until you re-choose it
+					if (r.op === "bar") this.bg = r.value;
 					this.render();
 				});
 				const del = row.createEl("button", {
@@ -5971,7 +6003,8 @@ class RulesModal extends Modal {
 		c.createDiv({ cls: "ptb-label", text: this.editing != null ? `Edit rule ${this.editing + 1}` : "New rule" });
 		const scale = this.op === "scale";
 		const bar = this.op === "bar";
-		const needsValue = !scale && !bar && this.op !== "empty" && this.op !== "notempty";
+		const icon = this.op === "icon";
+		const needsValue = !scale && !bar && !icon && this.op !== "empty" && this.op !== "notempty";
 		new Setting(c)
 			.setName("Condition")
 			.addDropdown((d) =>
@@ -5987,6 +6020,7 @@ class RulesModal extends Modal {
 						regex: "matches pattern",
 						scale: "color scale (min→max)",
 						bar: "data bar",
+						icon: "icon set",
 					})
 					.setValue(this.op)
 					.onChange((v) => {
@@ -6013,6 +6047,35 @@ class RulesModal extends Modal {
 					"A bar behind every numeric cell in this column, as long as the value is against the column's largest. " +
 					"It is drawn on screen and never written to the note, so it re-scales itself as values change and as a filter hides rows.",
 			});
+		}
+		if (icon) {
+			c.createEl("p", {
+				cls: "ptb-modal-desc",
+				text:
+					"A mark before every numeric cell, by which third of the column's range the value sits in. " +
+					"Drawn on screen and never written to the note, so it keeps up as values change and as a filter hides rows.",
+			});
+			new Setting(c).setName("Icons").addDropdown((d) =>
+				d
+					.addOptions({ arrows: "▲ ▬ ▼   arrows", traffic: "●  traffic lights", symbols: "✓ ! ✗   symbols" })
+					.setValue(ICON_SETS.includes(this.value as IconSet) ? this.value : "arrows")
+					.onChange((v) => (this.value = v))
+			);
+		}
+		if (icon) {
+			const btns0 = c.createDiv({ cls: "ptb-modal-btns" });
+			btns0.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+			const label = this.editing != null ? "Update rule" : "Add rule";
+			btns0.createEl("button", { text: label, cls: "mod-cta" }).addEventListener("click", () => {
+				const rule = this.currentRule();
+				if (!rule) return;
+				const next = this.rules.slice();
+				if (this.editing != null) next[this.editing] = rule;
+				else next.push(rule);
+				this.close();
+				void this.plugin.setColumnRules(next, this.target);
+			});
+			return;
 		}
 		c.createDiv({ cls: "ptb-label", text: scale ? "Low fill (column minimum)" : bar ? "Bar color" : "Cell fill" });
 		this.swatchRow(
@@ -6082,6 +6145,10 @@ class RulesModal extends Modal {
 				return null;
 			}
 			return { op: "bar", value: this.bg, bg: null, fg: null };
+		}
+		if (this.op === "icon") {
+			const set = ICON_SETS.includes(this.value as IconSet) ? this.value : "arrows";
+			return { op: "icon", value: set, bg: null, fg: null };
 		}
 		if (this.op === "between") {
 			const v = this.value.replace(/\s+(?:to|–|—)\s+/i, "~");
