@@ -3311,7 +3311,29 @@ export function planSetCellValue(lines: string[], target: CellTargetLoc, raw: st
 
 /* ---------------- conditional rule (bulk apply) ---------------- */
 
-export type RuleOp = "gt" | "lt" | "eq" | "contains" | "between" | "empty" | "notempty" | "regex" | "scale";
+export type RuleOp = "gt" | "lt" | "eq" | "contains" | "between" | "empty" | "notempty" | "regex" | "scale" | "bar";
+
+/**
+ * How long each data bar is, as a percentage, given a column's values with
+ * nulls where a cell holds nothing numeric.
+ *
+ * The baseline is zero whenever the column has no negatives, which is nearly
+ * always and is what a bar is read as: half the length means half the value.
+ * Excel's automatic rule instead stretches the smallest value to a stub and the
+ * largest to full width, which makes 99 and 100 look like nothing and
+ * everything. A column that does hold negatives has no honest zero to measure
+ * from, so that one falls back to spanning its own range.
+ */
+export function barPercents(values: (number | null)[]): (number | null)[] {
+	const nums = values.filter((v): v is number => v != null);
+	if (!nums.length) return values.map(() => null);
+	const base = Math.min(0, ...nums);
+	const top = Math.max(0, ...nums);
+	const span = top - base;
+	return values.map((v) =>
+		v == null ? null : span === 0 ? 100 : Math.max(0, Math.min(100, Math.round(((v - base) / span) * 100)))
+	);
+}
 
 /** "10~20" → [10, 20] (order-insensitive); nulls when either side isn't numeric. */
 function betweenBounds(value: string): [number | null, number | null] {
@@ -3376,6 +3398,10 @@ export function ruleHit(inner: string, op: RuleOp, value: string): boolean {
 			return false;
 		}
 	}
+	// A data bar is drawn on screen, not painted into the cell, so it must never
+	// count as a match: a rule list is checked top to bottom and the first hit
+	// wins, and a bar that "hit" would stop the rules under it ever running.
+	if (op === "bar") return false;
 	if (op === "scale") return !!n;
 	return n && vn ? n.value === vn.value : normalizeText(inner).toLowerCase() === value.toLowerCase();
 }
@@ -3435,7 +3461,7 @@ export function planApplyRule(
 
 /** Decode a data-rule header tag: "lt:0:-:#F00" → { op, value, bg, fg }. */
 export function parseRuleTag(tag: string): { op: RuleOp; value: string; bg: string | null; fg: string | null } | null {
-	const m = tag.match(/^(gt|lt|eq|contains|between|empty|notempty|regex|scale):([^:]*):([^:]*):([^:]*)$/);
+	const m = tag.match(/^(gt|lt|eq|contains|between|empty|notempty|regex|scale|bar):([^:]*):([^:]*):([^:]*)$/);
 	if (!m) return null;
 	return { op: m[1] as RuleOp, value: m[2], bg: m[3] === "-" ? null : m[3], fg: m[4] === "-" ? null : m[4] };
 }

@@ -92,6 +92,7 @@ import {
 	planSetColumnFilter,
 	planClearFilters,
 	filteredRows,
+	barPercents,
 	listTag,
 	listValues,
 	listSafe,
@@ -1249,6 +1250,20 @@ eq(at(4, 0, -1, 0), "2,0", "a blank neighbour above is jumped, landing on the bo
 eq(at(2, 0, -1, 0), "0,0", "while a run above walks to its top");
 eq(at(1, 2, 1, 0), "4,2", "an empty column walks all the way to the far edge");
 eq(edgeInDirection([], 0, 0, 1, 0).r, 0, "an empty grid has no edge to find");
+
+// --- data bars ---
+const bars = (v: (number | null)[]) => barPercents(v).map((x) => (x === null ? "-" : x)).join(",");
+eq(bars([0, 50, 100]), "0,50,100", "with no negatives the baseline is zero, so half the value is half the bar");
+eq(bars([25, 50, 100]), "25,50,100", "which is what makes 25 out of 100 read as a quarter");
+eq(bars([99, 100]), "99,100", "and what stops 99 and 100 looking like nothing and everything");
+eq(bars([5, 5, 5]), "100,100,100", "a column all of one value is all full bars, not a division by zero");
+eq(bars([0, 0]), "100,100", "and so is a column of zeros");
+eq(bars([-10, 0, 10]), "0,50,100", "a column with negatives has no honest zero, so it spans its own range");
+eq(bars([1, null, 2]), "50,-,100", "a cell with nothing numeric in it gets no bar");
+eq(bars([null, null]), "-,-", "and a column with none gets none at all");
+eq(bars([]), "", "an empty column is not an error");
+ok(!ruleHit("50", "bar", "#4A90D9"), "a bar never counts as a match, or it would stop the rules under it running");
+eq(parseRuleTag("bar:#4A90D9:-:-")?.op, "bar", "a bar rule reads back off the header like any other");
 
 // --- data validation: a column's list of allowed values ---
 const DV = [
