@@ -3311,7 +3311,7 @@ export function planSetCellValue(lines: string[], target: CellTargetLoc, raw: st
 
 /* ---------------- conditional rule (bulk apply) ---------------- */
 
-export type RuleOp = "gt" | "lt" | "eq" | "contains" | "between" | "empty" | "notempty" | "regex" | "scale" | "bar";
+export type RuleOp = "gt" | "lt" | "eq" | "contains" | "between" | "empty" | "notempty" | "regex" | "scale" | "bar" | "icon";
 
 /**
  * How long each data bar is, as a percentage, given a column's values with
@@ -3324,6 +3324,40 @@ export type RuleOp = "gt" | "lt" | "eq" | "contains" | "between" | "empty" | "no
  * everything. A column that does hold negatives has no honest zero to measure
  * from, so that one falls back to spanning its own range.
  */
+export const ICON_SETS = ["arrows", "traffic", "symbols"] as const;
+export type IconSet = (typeof ICON_SETS)[number];
+
+/**
+ * Which band of an icon set each value falls in, 0 being the top one.
+ *
+ * Excel's rule, and the right one here: the bands are equal slices of the
+ * column's own range, so the cut points for three icons are two thirds and one
+ * third of the way from the smallest value to the largest. That is different
+ * from a data bar on purpose. A bar is a quantity and needs a zero to be read
+ * against; an icon is a rank, and ranking against zero would put every icon in
+ * the top band the moment a column had no small values in it.
+ *
+ * A column whose values are all the same is all top band, which is the same
+ * answer barPercents gives that column when it makes every bar full.
+ */
+export function iconBands(values: (number | null)[], bands = 3): (number | null)[] {
+	const n = Math.max(2, Math.min(5, Math.round(bands)));
+	const nums = values.filter((v): v is number => v != null);
+	if (!nums.length) return values.map(() => null);
+	const min = Math.min(...nums);
+	const max = Math.max(...nums);
+	const span = max - min;
+	return values.map((v) => {
+		if (v == null) return null;
+		if (span === 0) return 0;
+		const pct = ((v - min) / span) * 100;
+		for (let i = 0; i < n - 1; i++) {
+			if (pct >= (100 * (n - 1 - i)) / n) return i;
+		}
+		return n - 1;
+	});
+}
+
 export function barPercents(values: (number | null)[]): (number | null)[] {
 	const nums = values.filter((v): v is number => v != null);
 	if (!nums.length) return values.map(() => null);
@@ -3401,7 +3435,7 @@ export function ruleHit(inner: string, op: RuleOp, value: string): boolean {
 	// A data bar is drawn on screen, not painted into the cell, so it must never
 	// count as a match: a rule list is checked top to bottom and the first hit
 	// wins, and a bar that "hit" would stop the rules under it ever running.
-	if (op === "bar") return false;
+	if (op === "bar" || op === "icon") return false;
 	if (op === "scale") return !!n;
 	return n && vn ? n.value === vn.value : normalizeText(inner).toLowerCase() === value.toLowerCase();
 }
@@ -3461,7 +3495,7 @@ export function planApplyRule(
 
 /** Decode a data-rule header tag: "lt:0:-:#F00" → { op, value, bg, fg }. */
 export function parseRuleTag(tag: string): { op: RuleOp; value: string; bg: string | null; fg: string | null } | null {
-	const m = tag.match(/^(gt|lt|eq|contains|between|empty|notempty|regex|scale|bar):([^:]*):([^:]*):([^:]*)$/);
+	const m = tag.match(/^(gt|lt|eq|contains|between|empty|notempty|regex|scale|bar|icon):([^:]*):([^:]*):([^:]*)$/);
 	if (!m) return null;
 	return { op: m[1] as RuleOp, value: m[2], bg: m[3] === "-" ? null : m[3], fg: m[4] === "-" ? null : m[4] };
 }

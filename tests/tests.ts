@@ -93,6 +93,7 @@ import {
 	planClearFilters,
 	filteredRows,
 	barPercents,
+	iconBands,
 	listTag,
 	listValues,
 	listSafe,
@@ -1263,6 +1264,19 @@ eq(bars([1, null, 2]), "50,-,100", "a cell with nothing numeric in it gets no ba
 eq(bars([null, null]), "-,-", "and a column with none gets none at all");
 eq(bars([]), "", "an empty column is not an error");
 ok(!ruleHit("50", "bar", "#4A90D9"), "a bar never counts as a match, or it would stop the rules under it running");
+
+// --- icon sets ---
+const icons = (v: (number | null)[], n = 3) => iconBands(v, n).map((x) => (x === null ? "-" : x)).join(",");
+eq(icons([0, 50, 100]), "2,1,0", "three icons cut the column's range into thirds, band 0 being the top");
+eq(icons([0, 32, 34, 66, 68, 100]), "2,2,1,1,0,0", "and the cut points are a third and two thirds of the way up that range");
+eq(icons([10, 20, 30]), "2,1,0", "a column that never comes near zero still uses all three, because an icon is a rank");
+eq(icons([5, 5, 5]), "0,0,0", "a column all of one value is all top band, the same answer the bars give it");
+eq(icons([1, null, 9]), "2,-,0", "a cell with nothing numeric in it gets no icon");
+eq(icons([0, 25, 50, 75, 100], 5), "4,3,2,1,0", "five icons cut it into fifths");
+eq(icons([0, 100], 2), "1,0", "and two into halves");
+eq(icons([]), "", "an empty column is not an error");
+ok(!ruleHit("50", "icon", "arrows"), "an icon never counts as a match either");
+eq(parseRuleTag("icon:arrows:-:-")?.value, "arrows", "an icon rule stores which set it draws");
 eq(parseRuleTag("bar:#4A90D9:-:-")?.op, "bar", "a bar rule reads back off the header like any other");
 
 // --- data validation: a column's list of allowed values ---
