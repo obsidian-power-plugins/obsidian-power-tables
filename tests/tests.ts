@@ -90,6 +90,7 @@ import {
 	columnFilterAt,
 	planSetColumnFilter,
 	planClearFilters,
+	filteredRows,
 	dragFillPreview,
 	shiftFormulaRefs,
 	formulaErrorText,
@@ -1276,6 +1277,78 @@ ok(widened[0].includes('data-flt="ex:West"'), "and setting the width keeps the f
 const ruled = applyPlan(withFlt, planSetColumnRules(withFlt.slice(), { line: 2, col: 0, expect: null }, [{ op: "gt", value: "5", bg: "#0F0", fg: null }]));
 ok(ruled[0].includes('data-flt="ex:West"'), "as does setting the color rules");
 
+// which rows a filter is hiding, reached from the file rather than the screen
+eq([...filteredRows(FLT.slice(), 2)].length, 0, "a table with no filter hides nothing");
+const eastOnly = applyPlan(FLT, planSetColumnFilter(FLT.slice(), T0, { op: "in", value: "East" }));
+eq([...filteredRows(eastOnly, 2)].sort().join(","), "2,4", "and one that has a filter names the grid rows it hides");
+const twoCols = applyPlan(eastOnly, planSetColumnFilter(eastOnly.slice(), { line: 2, col: 1, expect: null }, { op: "gt", value: "90" }));
+eq([...filteredRows(twoCols, 2)].sort().join(","), "2,3,4", "columns combine with AND: a row has to pass every filter to stay");
+// the same answer normalizeText gives the screen, so SUBTOTAL and copy agree with it
+// the pipe inside an aliased wiki link is escaped, as it has to be to sit in a
+// table cell at all; parseRow reads the escape and the link stays one cell
+const LINKED = ["| Region |", "| - |", "| [[Notes/East\\|East]] |", "| West |"];
+const linkFlt = applyPlan(LINKED, planSetColumnFilter(LINKED.slice(), T0, { op: "in", value: "East" }));
+eq([...filteredRows(linkFlt, 2)].join(","), "2", "a wiki link filters by the alias it renders as, not by its source");
+
+// SUBTOTAL: the one function that knows what is on screen
+const SUB = [
+	"| Region | Amount |",
+	"| - | - |",
+	"| East | 100 |",
+	"| West | 250 |",
+	"| East | 75 |",
+];
+const subGrid = tableGrid(SUB.slice(), 0)!;
+const hid = new Set([2]); // pretend "West" is filtered out
+eq(evalFormula("=SUBTOTAL(9,B2:B4)", subGrid.rows, 4, 1, hid), 175, "SUBTOTAL(9) sums only what the filter leaves");
+eq(evalFormula("=SUBTOTAL(109,B2:B4)", subGrid.rows, 4, 1, hid), 175, "and the 10x code reads the same, there being no hiding rows by hand here");
+eq(evalFormula("=SUM(B2:B4)", subGrid.rows, 4, 1, hid), 425, "while SUM still totals the column, exactly as it does in Excel");
+eq(evalFormula("=SUBTOTAL(1,B2:B4)", subGrid.rows, 4, 1, hid), 87.5, "1 is the average of what is left");
+eq(evalFormula("=SUBTOTAL(2,B2:B4)", subGrid.rows, 4, 1, hid), 2, "2 counts the numbers");
+eq(evalFormula("=SUBTOTAL(3,A2:A4)", subGrid.rows, 4, 0, hid), 2, "3 counts the non-blanks");
+eq(evalFormula("=SUBTOTAL(4,B2:B4)", subGrid.rows, 4, 1, hid), 100, "4 is the max of what is left");
+eq(evalFormula("=SUBTOTAL(5,B2:B4)", subGrid.rows, 4, 1, hid), 75, "and 5 the min");
+eq(evalFormula("=SUBTOTAL(9,B2:B4)", subGrid.rows, 4, 1), 425, "with nothing hidden it is just the sum");
+const subErr = (f: () => unknown): string => {
+	try {
+		f();
+		return "(no error)";
+	} catch (e) {
+		return formulaErrorText(e);
+	}
+};
+eq(subErr(() => evalFormula("=SUBTOTAL(8,B2:B4)", subGrid.rows, 4, 1, hid)), "#VALUE!", "a code this evaluator cannot compute is an argument error");
+eq(subErr(() => evalFormula("=SUBTOTAL(9)", subGrid.rows, 4, 1, hid)), "#VALUE!", "and so is naming no range at all");
+// end to end: the stored filter drives the stored value
+const SUBF = [...SUB, '| Total | <span class="ptb" data-f="=SUBTOTAL(9,B2:B4)">0</span> |'];
+const filtered = applyPlan(SUBF, planSetColumnFilter(SUBF.slice(), T0, { op: "in", value: "East" }));
+ok(settle(filtered)[5].includes(">175<"), "a recalc reads the table's own filter, so the totals row agrees with the screen");
+
+// copy takes what you can see
+const vis = planCopyCells(eastOnly.slice(), [{ line: 2, col: 0 }, { line: 3, col: 0 }, { line: 4, col: 0 }, { line: 5, col: 0 }])!;
+eq(vis.rows.length, 2, "a filtered row is not copied, the way Excel copies a filtered range");
+eq(clipToTsv(vis), "East\nEast", "so the clipboard holds what was on screen");
+eq(vis.srcRows.join(","), "1,3", "and each copied row remembers the grid row it came from");
+const unfiltered = planCopyCells(FLT.slice(), [{ line: 2, col: 0 }, { line: 3, col: 0 }])!;
+eq(unfiltered.rows.length, 2, "with no filter every row in the block is taken");
+// a reference shifts by the distance its own cell travelled, which skipped rows change
+const GAPPY = ["| A | B |", "| - | - |", "| 1 | =A2*2 |", "| 2 | |", "| 3 | =A4*2 |"];
+const GAPS = applyPlan(GAPPY, { edits: recalcCalcs(GAPPY.slice()) });
+const hole = applyPlan(GAPS, planSetColumnFilter(GAPS.slice(), { line: 2, col: 0, expect: null }, { op: "ex", value: "2" }));
+const gapClip = planCopyCells(hole.slice(), [{ line: 2, col: 1 }, { line: 3, col: 1 }, { line: 4, col: 1 }])!;
+eq(gapClip.srcRows.join(","), "1,3", "a hole in the middle of a copied block is a hole in its source rows");
+const landed = settle(applyPlan(hole, planPasteCells(hole.slice(), [{ line: 2, col: 1 }], gapClip, "formulas")));
+ok(landed[2].includes("=A2*2"), "the row that did not move keeps its reference");
+ok(landed[3].includes("=A3*2"), "and the one that closed the gap moves by the distance it actually travelled, not by its old spacing");
+
+// a totals row over a filtered table reaches for SUBTOTAL, the way AutoSum does
+const plainTotals = applyPlan(SUB, planTotalsRow(SUB.slice(), { line: 2, col: 0, expect: null }));
+ok(plainTotals[5].includes('data-calc="sum:col"'), "with nothing filtering, the totals row is the live column sum it always was");
+const SUBFLT = applyPlan(SUB, planSetColumnFilter(SUB.slice(), T0, { op: "in", value: "East" }));
+const fltTotals = applyPlan(SUBFLT, planTotalsRow(SUBFLT.slice(), { line: 2, col: 0, expect: null }));
+ok(fltTotals[5].includes("=SUBTOTAL(9,B2:B4)"), "over a filtering table it is a SUBTOTAL across the body rows");
+ok(settle(fltTotals)[5].includes(">175<"), "which reads the filter, so the total agrees with the rows above it");
+
 const many = applyPlan(set, planSetColumnFilter(set.slice(), { line: 2, col: 1, expect: null }, { op: "gt", value: "50" }));
 eq(planClearFilters(many.slice(), T0)!.cleared, 2, "clear-all takes every column's filter off in one edit");
 ok(!applyPlan(many, planClearFilters(many.slice(), T0)!)[0].includes("data-flt"), "leaving no filter behind");
@@ -1372,7 +1445,7 @@ ok(looksLikeFormula("=VLOOKUP('a',A1:B2,2)") && looksLikeFormula("=LEN(A2)"), "t
 ok(!looksLikeFormula("=hello world"), "plain text still is not a formula");
 
 // --- the autocomplete list and the parser cannot drift apart ---
-ok(FORMULA_FUNCTIONS.length === 42, "every registered function name is offered for completion");
+ok(FORMULA_FUNCTIONS.length === 43, "every registered function name is offered for completion");
 ok(
 	FORMULA_FUNCTIONS.every((f, i) => i === 0 || FORMULA_FUNCTIONS[i - 1] <= f),
 	"the suggestion list is alphabetical"

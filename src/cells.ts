@@ -588,6 +588,9 @@ export function recalcCalcs(lines: string[]): { line: number; text: string }[] {
 			if (!r || r.isDelim) continue;
 			let lineChanged = false;
 			let grid: Grid | null | undefined;
+			// both are per-line caches: one table's grid and the rows its filters
+			// are hiding, worked out once for however many formulas the line holds
+			let hidden: ReadonlySet<number> | undefined;
 			for (let c = 0; c < r.cellCount; c++) {
 				const parsed = parseCellContent(r.pieces[c + 1]);
 				if (parsed.calc) {
@@ -607,9 +610,10 @@ export function recalcCalcs(lines: string[]): { line: number; text: string }[] {
 				if (!formula) continue;
 				if (grid === undefined) grid = tableGrid(work, i);
 				if (!grid) continue;
+				if (hidden === undefined) hidden = filteredRows(work, i);
 				let value = "#ERR";
 				try {
-					value = formatFormulaResult(evalFormula(formula, grid.rows, gridRowOf(grid, i), c));
+					value = formatFormulaResult(evalFormula(formula, grid.rows, gridRowOf(grid, i), c, hidden));
 				} catch (e) {
 					value = formulaErrorText(e);
 				}
@@ -1774,9 +1778,17 @@ export function planInsertRow(lines: string[], target: CellTargetLoc, where: "ab
 	return { edits, cursorLine: at, cursorCh: cursorForCol(text, Math.min(target.col, r.cellCount - 1)) };
 }
 
-/** Append a live totals row: "Total" under the first column and a live column
- *  sum under every other column with numeric cells. If the table's body already
- *  holds a column-wise live calc (an existing totals row), nothing is added. */
+/**
+ * Append a live totals row: "Total" under the first column and a live column
+ * sum under every other column with numeric cells. If the table's body already
+ * holds a column-wise live calc (an existing totals row), nothing is added.
+ *
+ * Over a table that is filtering, the sums are written as `SUBTOTAL(9, …)`
+ * instead, which is what AutoSum does in Excel for the same reason: a totals
+ * row under a filtered table that reported the whole column would disagree with
+ * every number above it. Turning a filter on afterwards does not rewrite a
+ * totals row that is already there; that is the user's formula to change.
+ */
 export function planTotalsRow(lines: string[], target: CellTargetLoc): (EditPlan & { added: number }) | null {
 	const ln = locateLine(lines, target);
 	if (ln == null) return null;
@@ -1797,12 +1809,26 @@ export function planTotalsRow(lines: string[], target: CellTargetLoc): (EditPlan
 			if (!parsed.calc && parseNumeric(parsed.inner)) numeric[c] = true;
 		}
 	}
+	// body rows in formula numbering, where the header is row 1: the range has
+	// to stop above the totals row about to be appended
+	let bodyRows = 0;
+	for (let i = delimIdx + 1; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) bodyRows++;
+	}
+	const filtering = Array.from({ length: hr.cellCount }, (_, c) => parseCellContent(hr.pieces[c + 1]).flt).some(Boolean);
+
 	const pieces = [""];
 	let added = 0;
 	for (let c = 0; c < hr.cellCount; c++) {
 		if (c === 0) pieces.push(" Total ");
 		else if (numeric[c]) {
-			pieces.push(` ${buildCellContent("0", null, null, { fn: "sum", dir: "column" })} `);
+			const letter = colLetterOf(c);
+			pieces.push(
+				filtering
+					? ` ${buildCellContent("0", null, null, null, `=SUBTOTAL(9,${letter}2:${letter}${bodyRows + 1})`)} `
+					: ` ${buildCellContent("0", null, null, { fn: "sum", dir: "column" })} `
+			);
 			added++;
 		} else pieces.push("   ");
 	}
@@ -2094,7 +2120,7 @@ const RE_REF = /^(\$?)([A-Za-z]{1,2})(\$?)(\d+)/;
    and looksLikeFormula decides with it, so adding a function here is the whole
    registration. */
 const FN_NAMES =
-	"SUMPRODUCT|SUMIF|SUM|COUNTBLANK|COUNTIF|COUNTA|COUNT|AVERAGEIF|AVERAGE|AVG|MEDIAN|PRODUCT|POWER|SQRT|STDEV|INT|MOD|" +
+	"SUBTOTAL|SUMPRODUCT|SUMIF|SUM|COUNTBLANK|COUNTIF|COUNTA|COUNT|AVERAGEIF|AVERAGE|AVG|MEDIAN|PRODUCT|POWER|SQRT|STDEV|INT|MOD|" +
 	"ROUNDUP|ROUNDDOWN|ROUND|MIN|MAX|IFERROR|IF|AND|OR|NOT|ABS|LEN|LEFT|RIGHT|MID|TRIM|UPPER|LOWER|CONCAT|" +
 	"VLOOKUP|MATCH|INDEX|YEAR|MONTH|DAY";
 const RE_FN = new RegExp(`^(${FN_NAMES})\\s*\\(`, "i");
@@ -2605,7 +2631,13 @@ export function matchCriteria(raw: string, crit: FVal): boolean {
  * Numbers flow through math; text flows through refs, IF, and comparisons.
  * Throws on any invalid input, callers render #ERR.
  */
-export function evalFormula(src: string, rows: string[][], selfRow: number, selfCol: number): FVal {
+export function evalFormula(
+	src: string,
+	rows: string[][],
+	selfRow: number,
+	selfCol: number,
+	hidden?: ReadonlySet<number>
+): FVal {
 	const toks = tokenizeFormula(src.replace(/^=/, ""));
 	let p = 0;
 	const peek = () => toks[p];
@@ -2679,11 +2711,15 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 
 	function fnCall(name: string): FVal {
 		const args = fnArgs();
-		const nums = (): number[] => {
+		/** `skip` is SUBTOTAL's whole job: the grid rows a filter is hiding drop
+		 *  out before anything is added up. Every other function ignores it, the
+		 *  way SUM ignores a filter in Excel. */
+		const nums = (list: Arg[] = args, skip?: ReadonlySet<number>): number[] => {
 			const out: number[] = [];
-			for (const a of args) {
+			for (const a of list) {
 				if ("cells" in a) {
 					for (const { r, c } of a.cells) {
+						if (skip?.has(r)) continue;
 						const v = numAt(r, c);
 						if (v != null) out.push(v);
 					}
@@ -2820,6 +2856,54 @@ export function evalFormula(src: string, rows: string[][], selfRow: number, self
 				if (v.length < 2) throw new Error(ERR_DIV0);
 				const mean = v.reduce((x, y) => x + y, 0) / v.length;
 				return Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / (v.length - 1));
+			}
+			case "SUBTOTAL": {
+				// Excel's one function that knows what is on screen. The 1-11 codes
+				// and the 101-111 codes differ only over rows hidden by hand, which
+				// is not a thing you can do here, so both read the same: skip what
+				// the filter is hiding.
+				const code = Math.round(asNum(args[0]));
+				const rest = args.slice(1);
+				if (!rest.length) throw new Error(ERR_VALUE);
+				const v = nums(rest, hidden);
+				switch (code > 100 ? code - 100 : code) {
+					case 1: {
+						if (!v.length) throw new Error(ERR_DIV0);
+						return v.reduce((x, y) => x + y, 0) / v.length;
+					}
+					case 2:
+						return v.length;
+					case 3: {
+						let n = 0;
+						for (const a of rest) {
+							if ("cells" in a) {
+								for (const { r, c } of a.cells) {
+									if (hidden?.has(r)) continue;
+									if (plainCellText(rows[r]?.[c] ?? "") !== "") n++;
+								}
+							} else if (a.v !== "") n++;
+						}
+						return n;
+					}
+					case 4:
+						return v.length ? Math.max(...v) : 0;
+					case 5:
+						return v.length ? Math.min(...v) : 0;
+					case 6:
+						return v.reduce((x, y) => x * y, 1);
+					case 7: {
+						if (v.length < 2) throw new Error(ERR_DIV0);
+						const mean = v.reduce((x, y) => x + y, 0) / v.length;
+						return Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / (v.length - 1));
+					}
+					case 9:
+						return v.reduce((x, y) => x + y, 0);
+					default:
+						// 8, 10 and 11 are STDEVP, VAR and VARP, which this evaluator
+						// does not have as functions either; naming a code it cannot
+						// compute is an argument error, as it is in Excel
+						throw new Error(ERR_VALUE);
+				}
 			}
 			case "SUMPRODUCT": {
 				const lists = args.map((a) => {
@@ -3158,7 +3242,7 @@ export function planSetCellValue(lines: string[], target: CellTargetLoc, raw: st
 		let value = "#ERR";
 		if (g) {
 			try {
-				value = formatFormulaResult(evalFormula(t, g.rows, gridRowOf(g, ln), col));
+				value = formatFormulaResult(evalFormula(t, g.rows, gridRowOf(g, ln), col, filteredRows(lines, ln)));
 			} catch (e) {
 				value = formulaErrorText(e);
 			}
@@ -3442,6 +3526,49 @@ export function planSetColumnFilter(lines: string[], target: CellTargetLoc, filt
 		cursorLine: ln,
 		cursorCh: cursorForCol(lines[ln], col),
 	};
+}
+
+/**
+ * The grid rows an AutoFilter is hiding, row 0 being the header, which never
+ * hides. Columns combine with AND: a row has to pass every filter to stay.
+ *
+ * This is the same answer the screen shows, reached from the file rather than
+ * from the DOM, and the two agree because both route their text through
+ * normalizeText: it resolves a wiki link to the alias it renders as, a markdown
+ * link to its label, and strips emphasis, so markdown and rendered text arrive
+ * at the same string. Anything needing this answer without a DOM to read, which
+ * is SUBTOTAL and copy, asks here.
+ */
+export function filteredRows(lines: string[], ln: number): Set<number> {
+	const out = new Set<number>();
+	const { start, end, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return out;
+	const hr = parseRow(lines[start]);
+	if (!hr || hr.isDelim) return out;
+	const filters: (ColFilter | null)[] = [];
+	let any = false;
+	for (let c = 0; c < hr.cellCount; c++) {
+		const f = parseFilterTag(parseCellContent(hr.pieces[c + 1]).flt);
+		filters.push(f);
+		if (f) any = true;
+	}
+	if (!any) return out;
+	let grid = 0;
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (!r || r.isDelim) continue;
+		if (grid > 0) {
+			for (let c = 0; c < filters.length; c++) {
+				if (!filters[c] || c >= r.cellCount) continue;
+				if (!filterHit(parseCellContent(r.pieces[c + 1]).inner, filters[c])) {
+					out.add(grid);
+					break;
+				}
+			}
+		}
+		grid++;
+	}
+	return out;
 }
 
 /** Clear every column filter in the target's table. */
@@ -4581,6 +4708,10 @@ export type PasteMode = "all" | "values" | "formulas" | "formats";
  */
 export interface CellClip {
 	rows: string[][];
+	/** Grid row each clip row came from. A filter can hide a row out of the
+	 *  middle of a copied block, so these are not always consecutive, and a
+	 *  reference shifts by the distance its own cell travelled. */
+	srcRows: number[];
 	row: number;
 	col: number;
 	/**
@@ -4620,7 +4751,12 @@ export function planCopyCells(
 		const r = parseRow(lines[i]);
 		if (r && !r.isDelim) rowLines.push(i);
 	}
-	const lineNos = rowLines.filter((l) => l >= r1 && l <= r2);
+	// A row an AutoFilter is hiding is not copied, which is what Excel does with
+	// a filtered range: what you take is what you can see. It matters most for
+	// the selections that never had to be visible to be made, like pressing a
+	// column's guide letter.
+	const hidden = filteredRows(lines, targets[0].line);
+	const lineNos = rowLines.filter((l, k) => l >= r1 && l <= r2 && !hidden.has(k));
 	if (!lineNos.length) return null;
 
 	const rows = lineNos.map((l) => {
@@ -4630,6 +4766,7 @@ export function planCopyCells(
 	});
 	return {
 		rows,
+		srcRows: lineNos.map((l) => rowLines.indexOf(l)),
 		row: rowLines.indexOf(lineNos[0]),
 		col: c1,
 		refs: opts.cut ? "hold" : "shift",
@@ -4653,6 +4790,7 @@ export function clipFromRows(rows: string[][]): CellClip | null {
 	const width = Math.max(...rows.map((r) => r.length), 1);
 	return {
 		rows: rows.map((r) => Array.from({ length: width }, (_, i) => ` ${csvCell((r[i] ?? "").trim())} `)),
+		srcRows: rows.map((_, i) => i),
 		row: 0,
 		col: 0,
 		refs: "hold",
@@ -4778,7 +4916,11 @@ export function planPasteCells(
 	const cellAt = (i: number, j: number) => {
 		const si = transpose ? j : i;
 		const sj = transpose ? i : j;
-		return { piece: clip.rows[si]?.[sj] ?? "   ", row: clip.row + si, col: clip.col + sj };
+		return {
+			piece: clip.rows[si]?.[sj] ?? "   ",
+			row: clip.srcRows?.[si] ?? clip.row + si,
+			col: clip.col + sj,
+		};
 	};
 
 	// Excel tiles a copied block over a selection that is a whole multiple of
