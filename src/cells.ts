@@ -2169,9 +2169,13 @@ const RE_REF = /^(\$?)([A-Za-z]{1,2})(\$?)(\d+)/;
    and looksLikeFormula decides with it, so adding a function here is the whole
    registration. */
 const FN_NAMES =
-	"SUBTOTAL|SUMPRODUCT|SUMIF|SUM|COUNTBLANK|COUNTIF|COUNTA|COUNT|AVERAGEIF|AVERAGE|AVG|MEDIAN|PRODUCT|POWER|SQRT|STDEV|INT|MOD|" +
-	"ROUNDUP|ROUNDDOWN|ROUND|MIN|MAX|IFERROR|IF|AND|OR|NOT|ABS|LEN|LEFT|RIGHT|MID|TRIM|UPPER|LOWER|CONCAT|" +
-	"VLOOKUP|MATCH|INDEX|YEAR|MONTH|DAY";
+	// Longest first where one name starts another: this alternation is tried in
+	// order, so SUMIF ahead of SUMIFS would match the first six letters and
+	// leave a stray S behind. Same for COUNTIFS, AVERAGEIFS and IFS.
+	"SUBTOTAL|SUMPRODUCT|SUMIFS|SUMIF|SUM|COUNTBLANK|COUNTIFS|COUNTIF|COUNTA|COUNT|AVERAGEIFS|AVERAGEIF|AVERAGE|AVG|" +
+	"MEDIAN|PRODUCT|POWER|SQRT|STDEV|INT|MOD|" +
+	"ROUNDUP|ROUNDDOWN|ROUND|MIN|MAX|IFERROR|IFS|IF|AND|OR|NOT|ABS|LEN|LEFT|RIGHT|MID|TRIM|UPPER|LOWER|CONCAT|SWITCH|" +
+	"XLOOKUP|VLOOKUP|MATCH|INDEX|YEAR|MONTH|DAY";
 const RE_FN = new RegExp(`^(${FN_NAMES})\\s*\\(`, "i");
 
 /** Every function the parser knows, alphabetical, for the formula bar's
@@ -2787,6 +2791,27 @@ export function evalFormula(
 		};
 		/** Excel's truthiness: any nonzero number, any non-empty text. */
 		const truthy = (v: FVal): boolean => (typeof v === "number" ? v !== 0 : v.length > 0);
+		/**
+		 * The range/criteria pairs of a *IFS call, as one test per position.
+		 *
+		 * Every range has to be the same size as the one being aggregated, which
+		 * is what lets a single index answer for all of them: position k is the
+		 * same row in every range. Excel refuses a mismatch rather than lining
+		 * them up from the top and hoping, and so does this, because the answer
+		 * it would otherwise give is wrong without looking wrong.
+		 */
+		const ifsTest = (pairs: Arg[], len: number): ((k: number) => boolean) => {
+			if (!pairs.length || pairs.length % 2) throw new Error(ERR_VALUE);
+			const tests: { cells: { r: number; c: number }[]; crit: FVal }[] = [];
+			for (let i = 0; i < pairs.length; i += 2) {
+				const rng = pairs[i];
+				const crit = pairs[i + 1];
+				if (!rng || !("cells" in rng) || !crit || "cells" in crit) throw new Error(ERR_VALUE);
+				if (rng.cells.length !== len) throw new Error(ERR_VALUE);
+				tests.push({ cells: rng.cells, crit: crit.v });
+			}
+			return (k) => tests.every((t) => matchCriteria(rows[t.cells[k].r]?.[t.cells[k].c] ?? "", t.crit));
+		};
 		/** A looked-up cell comes back as a number when it reads as one. */
 		const cellValue = (r: number, c: number): FVal => {
 			const raw = rows[r]?.[c] ?? "";
@@ -2838,6 +2863,37 @@ export function evalFormula(
 				const pick = truthy ? args[1] : (args[2] ?? { v: "" });
 				if ("cells" in pick) throw new Error(ERR_VALUE);
 				return pick.v;
+			}
+			case "SUMIFS":
+			case "AVERAGEIFS": {
+				// Note the argument order, which is Excel's and is the reverse of
+				// SUMIF's: the range being totalled comes first, then the
+				// condition pairs. Getting this backwards is the single most
+				// common mistake with these, so it is worth matching exactly.
+				const target = args[0];
+				if (!target || !("cells" in target)) throw new Error(ERR_VALUE);
+				const pass = ifsTest(args.slice(1), target.cells.length);
+				let total = 0;
+				let n = 0;
+				for (let k = 0; k < target.cells.length; k++) {
+					if (!pass(k)) continue;
+					const v = numAt(target.cells[k].r, target.cells[k].c);
+					if (v != null) {
+						total += v;
+						n++;
+					}
+				}
+				if (name === "SUMIFS") return total;
+				if (!n) throw new Error(ERR_DIV0);
+				return total / n;
+			}
+			case "COUNTIFS": {
+				const first = args[0];
+				if (!first || !("cells" in first)) throw new Error(ERR_VALUE);
+				const pass = ifsTest(args, first.cells.length);
+				let n = 0;
+				for (let k = 0; k < first.cells.length; k++) if (pass(k)) n++;
+				return n;
 			}
 			case "SUMIF": {
 				const range = args[0];
@@ -3047,6 +3103,62 @@ export function evalFormula(
 					else s += String(a.v);
 				}
 				return s;
+			}
+			case "XLOOKUP": {
+				// What VLOOKUP cannot do: the column you want back does not have
+				// to sit to the right of the one you search, because the two are
+				// named separately instead of being counted off from each other.
+				const key = args[0];
+				const look = args[1];
+				const ret = args[2];
+				if (!key || "cells" in key || !look || !("cells" in look) || !ret || !("cells" in ret)) {
+					throw new Error(ERR_VALUE);
+				}
+				guardSelf(look.box);
+				guardSelf(ret.box);
+				if (look.cells.length !== ret.cells.length) throw new Error(ERR_VALUE);
+				for (let k = 0; k < look.cells.length; k++) {
+					const { r, c } = look.cells[k];
+					if (!matchCriteria(rows[r]?.[c] ?? "", key.v)) continue;
+					return cellValue(ret.cells[k].r, ret.cells[k].c);
+				}
+				// the fourth argument is the whole reason to reach for this over
+				// wrapping a lookup in IFERROR, which would also swallow real errors
+				const miss = args[3];
+				if (miss && !("cells" in miss)) return miss.v;
+				throw new Error(ERR_NA);
+			}
+			case "IFS": {
+				if (args.length < 2 || args.length % 2) throw new Error(ERR_VALUE);
+				for (let i = 0; i < args.length; i += 2) {
+					const cond = args[i];
+					const val = args[i + 1];
+					if (!cond || "cells" in cond || !val || "cells" in val) throw new Error(ERR_VALUE);
+					if (truthy(cond.v)) return val.v;
+				}
+				// Excel's answer when nothing matched, and the reason a last
+				// condition of TRUE() is how you write an "otherwise"
+				throw new Error(ERR_NA);
+			}
+			case "SWITCH": {
+				const subject = args[0];
+				if (!subject || "cells" in subject) throw new Error(ERR_VALUE);
+				let i = 1;
+				for (; i + 1 < args.length; i += 2) {
+					const cand = args[i];
+					const res = args[i + 1];
+					if (!cand || "cells" in cand || !res || "cells" in res) throw new Error(ERR_VALUE);
+					const same =
+						typeof subject.v === "number" && typeof cand.v === "number"
+							? subject.v === cand.v
+							: String(subject.v).toLowerCase() === String(cand.v).toLowerCase();
+					if (same) return res.v;
+				}
+				// an argument left over past the pairs is the default, which is
+				// how Excel spells "otherwise" here rather than with a TRUE()
+				const dflt = args[i];
+				if (dflt && !("cells" in dflt)) return dflt.v;
+				throw new Error(ERR_NA);
 			}
 			case "VLOOKUP": {
 				const key = args[0];

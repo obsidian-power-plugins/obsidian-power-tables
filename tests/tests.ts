@@ -147,6 +147,18 @@ function ok(cond: boolean, label: string) {
 	}
 }
 
+/** The error code a formula throws, as its Excel name. Defined up here with the
+ *  other helpers because three separate blocks below reach for it, and a const
+ *  is not in scope before its own line. */
+const errOf = (f: () => unknown): string => {
+	try {
+		f();
+		return "(no error)";
+	} catch (e) {
+		return formulaErrorText(e);
+	}
+};
+
 function eq(got: unknown, want: unknown, label: string) {
 	if (got !== want) console.error(`   got: ${JSON.stringify(got)}\n  want: ${JSON.stringify(want)}`);
 	ok(got === want, label);
@@ -1228,6 +1240,48 @@ ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as pla
 eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
 eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
 
+// --- multi-criteria functions ---
+// region, rep, amount, status
+const CRIT = [
+	["East", "Ann", "100", "Open"],
+	["West", "Bob", "250", "Open"],
+	["East", "Ann", "75", "Closed"],
+	["East", "Bob", "300", "Open"],
+	["West", "Ann", "50", "Closed"],
+];
+const mc = (f: string) => evalFormula(f, CRIT, 9, 9);
+eq(mc("=SUMIFS(C1:C5,A1:A5,'East')"), 475, "SUMIFS totals the rows one condition picks out");
+eq(mc("=SUMIFS(C1:C5,A1:A5,'East',B1:B5,'Ann')"), 175, "and narrows further with every pair after it");
+eq(mc("=SUMIFS(C1:C5,A1:A5,'East',B1:B5,'Ann',D1:D5,'Open')"), 100, "three conditions is no different from two");
+eq(mc("=SUMIFS(C1:C5,A1:A5,'South')"), 0, "nothing matching sums to nothing, rather than complaining");
+eq(mc("=SUMIFS(C1:C5,C1:C5,'>100')"), 550, "a comparison reads as one, the same as it does in SUMIF");
+eq(mc("=COUNTIFS(A1:A5,'East')"), 3, "COUNTIFS counts them");
+eq(mc("=COUNTIFS(A1:A5,'East',D1:D5,'Open')"), 2, "narrowing the same way");
+eq(mc("=AVERAGEIFS(C1:C5,A1:A5,'East')"), 475 / 3, "AVERAGEIFS averages what is left");
+eq(errOf(() => mc("=AVERAGEIFS(C1:C5,A1:A5,'South')")), "#DIV/0!", "and says so when that is nothing at all");
+// the argument order is the reverse of SUMIF's, and getting it wrong should say so
+eq(errOf(() => mc("=SUMIFS(A1:A5,'East')")), "#VALUE!", "a missing criteria range is an argument error");
+eq(errOf(() => mc("=SUMIFS(C1:C5,A1:A5)")), "#VALUE!", "so is a range with no criteria to go with it");
+eq(errOf(() => mc("=SUMIFS(C1:C5,A1:A4,'East')")), "#VALUE!", "and so is a criteria range that does not line up with the one being totalled");
+
+// XLOOKUP
+eq(mc("=XLOOKUP('Bob',B1:B5,C1:C5)"), 250, "XLOOKUP returns from the array it is told to");
+eq(mc("=XLOOKUP('300',C1:C5,A1:A5)"), "East", "including one to the left of what it searched, which VLOOKUP cannot do");
+eq(mc("=XLOOKUP('Zoe',B1:B5,C1:C5,0)"), 0, "a fourth argument answers for a miss");
+eq(errOf(() => mc("=XLOOKUP('Zoe',B1:B5,C1:C5)")), "#N/A", "and without one, a miss is #N/A");
+eq(errOf(() => mc("=XLOOKUP('Bob',B1:B5,C1:C4)")), "#VALUE!", "the two arrays have to be the same size");
+
+// IFS and SWITCH
+eq(evalFormula("=IFS(A1>5,'big',A1>0,'small')", [["3"]], 9, 9), "small", "IFS takes the first condition that holds");
+eq(evalFormula("=IFS(A1>5,'big',A1>0,'small')", [["9"]], 9, 9), "big", "in the order they are written");
+eq(errOf(() => evalFormula("=IFS(A1>5,'big')", [["1"]], 9, 9)), "#N/A", "nothing matching is #N/A, which is why a last TRUE is the way to say otherwise");
+eq(evalFormula("=IFS(A1>5,'big',1,'otherwise')", [["1"]], 9, 9), "otherwise", "and any always-true condition does it");
+eq(errOf(() => evalFormula("=IFS(A1>5)", [["9"]], 9, 9)), "#VALUE!", "a condition with no value to return is an argument error");
+eq(evalFormula("=SWITCH(A1,1,'one',2,'two')", [["2"]], 9, 9), "two", "SWITCH matches a value rather than a condition");
+eq(evalFormula("=SWITCH(A1,1,'one',2,'two','none')", [["7"]], 9, 9), "none", "an argument past the pairs is the default");
+eq(errOf(() => evalFormula("=SWITCH(A1,1,'one')", [["7"]], 9, 9)), "#N/A", "and without one, no match is #N/A");
+eq(evalFormula("=SWITCH(A1,'done','yes')", [["DONE"]], 9, 9), "yes", "text matches without regard to case, as it does everywhere else here");
+
 // --- Ctrl+Arrow: the jump to the edge of the data ---
 const NAV = [
 	["Item", "Qty", "", "Note"],
@@ -1405,16 +1459,8 @@ eq(evalFormula("=SUBTOTAL(3,A2:A4)", subGrid.rows, 4, 0, hid), 2, "3 counts the 
 eq(evalFormula("=SUBTOTAL(4,B2:B4)", subGrid.rows, 4, 1, hid), 100, "4 is the max of what is left");
 eq(evalFormula("=SUBTOTAL(5,B2:B4)", subGrid.rows, 4, 1, hid), 75, "and 5 the min");
 eq(evalFormula("=SUBTOTAL(9,B2:B4)", subGrid.rows, 4, 1), 425, "with nothing hidden it is just the sum");
-const subErr = (f: () => unknown): string => {
-	try {
-		f();
-		return "(no error)";
-	} catch (e) {
-		return formulaErrorText(e);
-	}
-};
-eq(subErr(() => evalFormula("=SUBTOTAL(8,B2:B4)", subGrid.rows, 4, 1, hid)), "#VALUE!", "a code this evaluator cannot compute is an argument error");
-eq(subErr(() => evalFormula("=SUBTOTAL(9)", subGrid.rows, 4, 1, hid)), "#VALUE!", "and so is naming no range at all");
+eq(errOf(() => evalFormula("=SUBTOTAL(8,B2:B4)", subGrid.rows, 4, 1, hid)), "#VALUE!", "a code this evaluator cannot compute is an argument error");
+eq(errOf(() => evalFormula("=SUBTOTAL(9)", subGrid.rows, 4, 1, hid)), "#VALUE!", "and so is naming no range at all");
 // end to end: the stored filter drives the stored value
 const SUBF = [...SUB, '| Total | <span class="ptb" data-f="=SUBTOTAL(9,B2:B4)">0</span> |'];
 const filtered = applyPlan(SUBF, planSetColumnFilter(SUBF.slice(), T0, { op: "in", value: "East" }));
@@ -1450,14 +1496,6 @@ eq(planClearFilters(many.slice(), T0)!.cleared, 2, "clear-all takes every column
 ok(!applyPlan(many, planClearFilters(many.slice(), T0)!)[0].includes("data-flt"), "leaving no filter behind");
 
 // --- operators: ^ & % ---
-const errOf = (f: () => unknown): string => {
-	try {
-		f();
-		return "(no error)";
-	} catch (e) {
-		return formulaErrorText(e);
-	}
-};
 eq(evalFormula("=A2^3", G, 5, 5), 8, "^ raises to a power");
 eq(evalFormula("=2^3^2", [[""]], 5, 5), 512, "^ is right associative, as in Excel");
 eq(evalFormula("=-2^2", [[""]], 5, 5), 4, "unary minus binds tighter than ^, as in Excel");
@@ -1541,7 +1579,7 @@ ok(looksLikeFormula("=VLOOKUP('a',A1:B2,2)") && looksLikeFormula("=LEN(A2)"), "t
 ok(!looksLikeFormula("=hello world"), "plain text still is not a formula");
 
 // --- the autocomplete list and the parser cannot drift apart ---
-ok(FORMULA_FUNCTIONS.length === 43, "every registered function name is offered for completion");
+ok(FORMULA_FUNCTIONS.length === 49, "every registered function name is offered for completion");
 ok(
 	FORMULA_FUNCTIONS.every((f, i) => i === 0 || FORMULA_FUNCTIONS[i - 1] <= f),
 	"the suggestion list is alphabetical"
@@ -1559,12 +1597,12 @@ eq(unimplemented.join(",") || "(none)", "(none)", "every suggested name reaches 
 
 // what the formula bar offers while you type
 eq(completionsAt("=VL", 3).join(","), "VLOOKUP", "typing the start of a name suggests it");
-eq(completionsAt("=SUM", 4).join(","), "SUM,SUMIF,SUMPRODUCT", "a name that is also a prefix keeps its longer siblings");
+eq(completionsAt("=SUM", 4).join(","), "SUM,SUMIF,SUMIFS,SUMPRODUCT", "a name that is also a prefix keeps its longer siblings");
 eq(completionsAt("=vlo", 4).join(","), "VLOOKUP", "matching ignores case");
 eq(completionsAt("=MEDIAN", 7).length, 0, "an exact and only match has nothing left to offer");
 eq(completionsAt("=A2+", 4).length, 0, "nothing is suggested where a name is not being typed");
 eq(completionsAt("plain text", 5).length, 0, "and never outside a formula");
-eq(completionsAt("=SUM(B2:B4)+AV", 14).join(","), "AVERAGE,AVERAGEIF,AVG", "the word at the caret is what counts, not the whole line");
+eq(completionsAt("=SUM(B2:B4)+AV", 14).join(","), "AVERAGE,AVERAGEIF,AVERAGEIFS,AVG", "the word at the caret is what counts, not the whole line");
 const comp = applyCompletion("=SUM(B2:B4)+AV", 14, "AVG");
 eq(comp.text, "=SUM(B2:B4)+AVG(", "accepting a suggestion writes the name and its open paren");
 eq(comp.caret, 16, "and leaves the caret inside the parentheses");
