@@ -73,6 +73,10 @@ import {
 	planPasteCells,
 	planSetColumnFilter,
 	planClearFilters,
+	planSetColumnList,
+	columnListAt,
+	columnDistinct,
+	listValues,
 	edgeInDirection,
 	parseFilterTag,
 	filterHit,
@@ -592,6 +596,11 @@ export default class PowerTablesPlugin extends Plugin {
 			name: "Clear all filters in this table",
 			callback: () => void this.clearFilters(),
 		});
+		this.addCommand({
+			id: "data-validation", icon: "list-checks",
+			name: "Data validation (column list)…",
+			callback: () => this.openListModal(),
+		});
 		this.addCommand({ id: "copy-cells", icon: "copy", name: "Copy cells", callback: () => void this.copyCells() });
 		this.addCommand({ id: "cut-cells", icon: "scissors", name: "Cut cells", callback: () => void this.copyCells(true) });
 		this.addCommand({
@@ -914,6 +923,8 @@ export default class PowerTablesPlugin extends Plugin {
 		this.registerDomEvent(document, "pointerdown", (evt) => this.onFillDown(evt), { capture: true });
 		// and the funnel, which opens the column's filter instead of editing the header
 		this.registerDomEvent(document, "pointerdown", (evt) => this.onFunnelDown(evt), { capture: true });
+		// and the data-validation chevron, on the same terms
+		this.registerDomEvent(document, "pointerdown", (evt) => this.onDropDown(evt), { capture: true });
 		// a press anywhere else puts the dropdown away, the way a menu behaves
 		this.registerDomEvent(document, "pointerdown", (evt) => {
 			if (!this.filterMenu) return;
@@ -1034,7 +1045,8 @@ export default class PowerTablesPlugin extends Plugin {
 		document.body.removeClass("ptb-striped", "ptb-compact", "ptb-cellrefs", "ptb-headerfill", "ptb-sticky");
 		document.body.style.removeProperty("--ptb-header-fill");
 		this.closeFilterMenu();
-		document.body.querySelectorAll(".ptb-funnel").forEach((f) => f.remove());
+		document.body.querySelectorAll(".ptb-funnel, .ptb-drop").forEach((f) => f.remove());
+		document.body.querySelectorAll(".ptb-hasdrop").forEach((c) => (c as HTMLElement).removeClass("ptb-hasdrop"));
 		document.body.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
 			(cell as HTMLElement).style.removeProperty("background-color");
@@ -1090,6 +1102,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.applyTableFlags();
 		this.renderCheckboxes();
 		this.renderFunnels();
+		this.renderDrops();
 		this.renderGuides();
 		this.renderFillHandle();
 	}
@@ -1643,6 +1656,124 @@ export default class PowerTablesPlugin extends Plugin {
 			}
 			row.toggleClass("ptb-fhidden", hide);
 		}
+	}
+
+	/* ---------------- data validation (the column's list, as a picker) ---------------- */
+
+	/**
+	 * Put a chevron in every cell of a column that has a list.
+	 *
+	 * The cell's own content is left exactly as it renders, colors and number
+	 * format included, and the chevron sits beside it. Replacing the cell with a
+	 * <select> would be less code and would throw away the thing this plugin is
+	 * for, which is what the cell looks like.
+	 */
+	private renderDrops() {
+		document.body
+			.querySelectorAll<HTMLTableElement>(":is(.markdown-rendered, .cm-table-widget) table")
+			.forEach((tbl) => {
+				const head = tbl.rows[0];
+				if (!head) return;
+				const lists = Array.from(head.cells).map((c) =>
+					listValues(c.querySelector<HTMLElement>("span.ptb[data-list]")?.getAttribute("data-list") ?? null)
+				);
+				const any = lists.some((l) => l.length);
+				if (!any) {
+					if (tbl.querySelector(".ptb-drop")) {
+						tbl.querySelectorAll(".ptb-drop").forEach((d) => d.remove());
+						tbl.querySelectorAll(".ptb-hasdrop").forEach((c) => (c as HTMLElement).removeClass("ptb-hasdrop"));
+					}
+					return;
+				}
+				for (const row of Array.from(tbl.rows).slice(1)) {
+					for (let c = 0; c < lists.length; c++) {
+						const cell = row.cells[c];
+						if (!cell) continue;
+						if (!lists[c].length) {
+							cell.querySelector(":scope > .ptb-drop")?.remove();
+							cell.removeClass("ptb-hasdrop");
+							continue;
+						}
+						// the focused cell in Live Preview is a text editor; leave it be
+						if (cell.querySelector(".cm-editor")) continue;
+						if (cell.querySelector(":scope > .ptb-drop")) continue;
+						const el = createDiv({ cls: "ptb-drop", attr: { title: "Pick a value for this cell" } });
+						setIcon(el, "chevron-down");
+						cell.append(el);
+						cell.addClass("ptb-hasdrop");
+					}
+				}
+			});
+	}
+
+	/** A press on a chevron offers the column's values and never reaches the cell
+	 *  underneath, which would otherwise start editing it. */
+	private onDropDown(evt: PointerEvent) {
+		if (!(evt.target instanceof Element)) return;
+		const el = evt.target.closest<HTMLElement>(".ptb-drop");
+		if (!el) return;
+		evt.preventDefault();
+		evt.stopPropagation();
+		const cell = el.closest<HTMLTableCellElement>("td, th");
+		const table = cell?.closest<HTMLTableElement>("table");
+		const head = table?.rows[0];
+		if (!cell || !head) return;
+		const values = listValues(
+			head.cells[cell.cellIndex]?.querySelector<HTMLElement>("span.ptb[data-list]")?.getAttribute("data-list") ?? null
+		);
+		if (!values.length) return;
+		const current = cellText(cell);
+		const menu = new Menu();
+		for (const v of values) {
+			menu.addItem((i) =>
+				i
+					.setTitle(v)
+					.setChecked(v === current)
+					.onClick(() => void this.setCellFromList(cell, v))
+			);
+		}
+		menu.addSeparator();
+		menu.addItem((i) => i.setTitle("Clear").setIcon("eraser").onClick(() => void this.setCellFromList(cell, "")));
+		menu.showAtPosition({ x: evt.clientX, y: evt.clientY });
+	}
+
+	/** Write a picked value into its cell, keeping whatever the cell was wearing. */
+	private async setCellFromList(cell: HTMLTableCellElement, value: string) {
+		const apply = (tgt: ClickTarget) =>
+			void this.runPlan({ ...tgt, editor: this.editorForPath(tgt.path), fromCursor: false }, (lines) =>
+				planSetCellValue(lines, tgt, value)
+			);
+		const tgt = this.targetFromCell(cell);
+		if (tgt) apply(tgt);
+		else void this.fallbackTargetFromCell(cell).then((fb) => fb && apply(fb));
+	}
+
+	/** The dialog behind "Data validation…": the column's values, one per line. */
+	openListModal() {
+		const t = this.resolveTarget();
+		if (t) new DataValidationModal(this.app, this, t).open();
+	}
+
+	/** The list stored on a target's column, read from the file. */
+	columnList(target: CellTarget): string[] {
+		const ed = target.editor ?? this.editorForPath(target.path);
+		return ed ? columnListAt(ed.getValue().split("\n"), target) : [];
+	}
+
+	/** What that column already holds, for seeding the list from it. */
+	columnDistinctValues(target: CellTarget): string[] {
+		const ed = target.editor ?? this.editorForPath(target.path);
+		return ed ? columnDistinct(ed.getValue().split("\n"), target) : [];
+	}
+
+	async setColumnList(values: string[], target: CellTarget) {
+		const plan = await this.runPlan(target, (lines) => planSetColumnList(lines, target, values));
+		if (!plan) return;
+		new Notice(
+			values.length
+				? `${values.length} value${values.length === 1 ? "" : "s"} on this column's list.`
+				: "List removed from this column."
+		);
 	}
 
 	/* ---------------- keyboard range selection ---------------- */
@@ -3996,6 +4127,7 @@ export default class PowerTablesPlugin extends Plugin {
 			["Fill right", "arrow-right-to-line", () => void this.fill("right")],
 			["Filter column…", "list-filter", () => this.openFilterForTarget()],
 			["Clear filters", "filter-x", () => void this.clearFilters()],
+			["Data validation…", "list-checks", () => this.openListModal()],
 			["Copy cells", "copy", () => void this.copyCells()],
 			["Cut cells", "scissors", () => void this.copyCells(true)],
 			["Paste cells", "clipboard-paste", () => void this.pasteCells()],
@@ -5119,6 +5251,9 @@ class PanelUI {
 		);
 		this.dataBtn(dgrid, "Copy CSV", "Copy the table to the clipboard as CSV", () => void this.plugin.copyTableCsv());
 		this.dataBtn(dgrid, "Rules…", "Conditional color rule for the targeted column", () => this.plugin.openRulesModal());
+		this.dataBtn(dgrid, "List…", "Data validation: the values this column is allowed to hold", () =>
+			this.plugin.openListModal()
+		);
 		this.dataBtn(dgrid, "Prettify", "Re-pad the raw markdown so the table's pipes line up", () =>
 			void this.plugin.prettifyTable()
 		);
@@ -5515,6 +5650,65 @@ class LinkCellModal extends Modal {
 		// an emptied text field means the address speaks for itself, which is
 		// also the one case a plain URL stays a plain URL
 		void this.onDone(this.text.trim() || url, url);
+	}
+}
+
+/**
+ * The column's list of allowed values, one per line.
+ *
+ * A textarea rather than a row of chips, because the common way to fill this in
+ * is to paste a list you already have, and the second most common is to seed it
+ * from the column and delete the two typos.
+ */
+class DataValidationModal extends Modal {
+	private ta!: HTMLTextAreaElement;
+
+	constructor(app: App, private plugin: PowerTablesPlugin, private target: CellTarget) {
+		super(app);
+	}
+
+	onOpen() {
+		this.titleEl.setText("Data validation");
+		floatModal(this);
+		const { contentEl } = this;
+		contentEl.createEl("p", {
+			cls: "ptb-modal-desc",
+			text:
+				"One value per line. Cells in this column get a chevron that offers them, so a status column is a click rather than a retype. " +
+				"Values off the list are still allowed: the note is the source of truth and a list cannot follow it out of the vault.",
+		});
+		this.ta = contentEl.createEl("textarea", {
+			cls: "ptb-csv-input",
+			attr: { rows: "8", placeholder: "Todo\nDoing\nDone" },
+		});
+		this.ta.value = this.plugin.columnList(this.target).join("\n");
+
+		const btns = contentEl.createDiv({ cls: "ptb-modal-btns" });
+		const seed = btns.createEl("button", { text: "From column" });
+		seed.setAttribute("title", "Fill the list from the values this column already holds");
+		seed.addEventListener("click", () => {
+			const found = this.plugin.columnDistinctValues(this.target);
+			this.ta.value = found.join("\n");
+			this.ta.focus();
+		});
+		const cancel = btns.createEl("button", { text: "Cancel" });
+		cancel.addEventListener("click", () => this.close());
+		const clear = btns.createEl("button", { text: "Remove list" });
+		clear.addEventListener("click", () => {
+			this.close();
+			void this.plugin.setColumnList([], this.target);
+		});
+		const ok = btns.createEl("button", { text: "Save", cls: "mod-cta" });
+		ok.addEventListener("click", () => {
+			const values = this.ta.value.split("\n");
+			this.close();
+			void this.plugin.setColumnList(values, this.target);
+		});
+		this.ta.focus();
+	}
+
+	onClose() {
+		this.contentEl.empty();
 	}
 }
 
