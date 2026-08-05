@@ -92,6 +92,12 @@ import {
 	planSetColumnFilter,
 	planClearFilters,
 	filteredRows,
+	listTag,
+	listValues,
+	listSafe,
+	columnListAt,
+	columnDistinct,
+	planSetColumnList,
 	dragFillPreview,
 	shiftFormulaRefs,
 	formulaErrorText,
@@ -1243,6 +1249,42 @@ eq(at(4, 0, -1, 0), "2,0", "a blank neighbour above is jumped, landing on the bo
 eq(at(2, 0, -1, 0), "0,0", "while a run above walks to its top");
 eq(at(1, 2, 1, 0), "4,2", "an empty column walks all the way to the far edge");
 eq(edgeInDirection([], 0, 0, 1, 0).r, 0, "an empty grid has no edge to find");
+
+// --- data validation: a column's list of allowed values ---
+const DV = [
+	"| Task | Status |",
+	"| - | - |",
+	"| a | Done |",
+	"| b | Todo |",
+	"| c | Done |",
+];
+const DVT = { line: 2, col: 1, expect: null };
+
+eq(listTag(["Todo", "Doing", "Done"]), "Todo~Doing~Done", "a list stores its values in order");
+eq(listTag(["Done", "Done", " Done "]), "Done", "the same value twice is one entry, trimmed");
+eq(listTag(["", "  "]), null, "a list of nothing is no list");
+eq(listValues("Todo~Done").join(","), "Todo,Done", "and reads back as it went in");
+eq(listSafe('a"b|c~d'), "a b c d", "the characters that would end the attribute, the cell or the list are traded for spaces");
+eq(listSafe("Blocked: waiting"), "Blocked: waiting", "a colon survives, unlike in a filter value, there being no op prefix to confuse");
+
+const dv = applyPlan(DV, planSetColumnList(DV.slice(), DVT, ["Todo", "Doing", "Done"]));
+ok(dv[0].includes('data-list="Todo~Doing~Done"'), "the list is stored on the column's header cell");
+ok(dv[2] === DV[2], "and no row is touched: the list is an input aid, not a rewrite");
+eq(columnListAt(dv, DVT).join(","), "Todo,Doing,Done", "which is where it reads back from");
+eq(columnListAt(DV.slice(), DVT).length, 0, "a column with no list has none");
+ok(!applyPlan(dv, planSetColumnList(dv.slice(), DVT, []))[0].includes("data-list"), "clearing takes the attribute back off");
+eq(planSetColumnList(dv.slice(), DVT, ["Todo", "Doing", "Done"])!.edits.length, 0, "storing the list it already has writes nothing");
+
+eq(columnDistinct(DV.slice(), DVT).join(","), "Done,Todo", "a list can be seeded from what the column already holds, each value once");
+
+// the header is getting crowded; every marker has to survive the others
+const both = applyPlan(dv, planSetColumnFilter(dv.slice(), DVT, { op: "in", value: "Done" }));
+ok(both[0].includes("data-list=") && both[0].includes("data-flt="), "a filter and a list live on the same header cell");
+const dvWide = applyPlan(both, planSetColumnWidth(both.slice(), DVT, 160));
+ok(dvWide[0].includes("data-list=") && dvWide[0].includes("data-flt=") && dvWide[0].includes('data-w="160"'), "and a width joins them without displacing either");
+ok(applyPlan(dvWide, planClearFilters(dvWide.slice(), DVT))![0].includes("data-list="), "clearing the filters leaves the list alone");
+const styled = applyPlan(dvWide, planEdits(dvWide.slice(), DVT, { bg: "#0F0" }, "column"));
+ok(styled[0].includes("data-list=") && styled[0].includes("data-flt="), "and coloring the column keeps both");
 
 // --- AutoFilter ---
 const FLT = [
