@@ -3526,12 +3526,18 @@ export function selectionStats(
 
 /* ---------------- copy table as CSV ---------------- */
 
-function csvDisplayText(piece: string): string {
+/** What a cell reads as once the plugin's wrapper and any whole-value emphasis
+ *  markers come off: the text to hand anything leaving the vault. */
+function cellDisplayText(piece: string): string {
 	let v = parseCellContent(piece).inner;
 	for (let i = 0; i < 3; i++) {
 		v = v.replace(/^\*\*([\s\S]+)\*\*$/, "$1").replace(/^\*([^*]|[^*][\s\S]*[^*])\*$/, "$1").replace(/^~~([\s\S]+)~~$/, "$1");
 	}
-	v = v.replace(/\\\|/g, "|").trim();
+	return v.replace(/\\\|/g, "|").trim();
+}
+
+function csvDisplayText(piece: string): string {
+	const v = cellDisplayText(piece);
 	return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
@@ -4397,6 +4403,320 @@ export function planDragFill(
 	if (!filled) return null;
 	const lastLine = drops[drops.length - 1].line;
 	return { edits, cursorLine: lastLine, cursorCh: cursorForCol(lines[lastLine], drops[drops.length - 1].col), filled };
+}
+
+/* ---------------- copy, cut and paste a block of cells ---------------- */
+
+export type PasteMode = "all" | "values" | "formulas" | "formats";
+
+/**
+ * A rectangle of cells lifted out of a table.
+ *
+ * Cells are held as their raw pieces, so the whole cell travels: value,
+ * formula, colors, borders, number format. Coordinates are grid coordinates
+ * with the header as row 0, because that is the space a relative reference is
+ * measured in: a formula pasted three rows down has to move three rows, and
+ * the divider is not a row.
+ */
+export interface CellClip {
+	rows: string[][];
+	row: number;
+	col: number;
+	/**
+	 * What a pasted formula's references do. A copy shifts them to where the
+	 * formula lands, the way Excel's relative references work. A cut moves the
+	 * cells themselves, so they keep pointing where they already pointed. Text
+	 * arriving from outside has no source coordinates to measure a shift from.
+	 */
+	refs: "shift" | "hold";
+	/** A cut empties its source when the paste lands. */
+	cut: boolean;
+	/** Where the block came from, so its owner can tell whether a cut is landing
+	 *  in the same file it was taken from. Nothing here reads it. */
+	path: string;
+	/** Document lines the block came from, for that same cut to clear. */
+	lineNos: number[];
+}
+
+/** Lift the rectangle the targets span out of its table. */
+export function planCopyCells(
+	lines: string[],
+	targets: { line: number; col: number }[],
+	opts: { cut?: boolean; path?: string } = {}
+): CellClip | null {
+	if (!targets.length) return null;
+	const { start, end, delimIdx } = tableBounds(lines, targets[0].line);
+	if (delimIdx < 0) return null;
+	const inTable = targets.filter((t) => t.line >= start && t.line <= end && t.line !== delimIdx);
+	if (!inTable.length) return null;
+	const r1 = Math.min(...inTable.map((t) => t.line));
+	const r2 = Math.max(...inTable.map((t) => t.line));
+	const c1 = Math.min(...inTable.map((t) => t.col));
+	const c2 = Math.max(...inTable.map((t) => t.col));
+
+	const rowLines: number[] = [];
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) rowLines.push(i);
+	}
+	const lineNos = rowLines.filter((l) => l >= r1 && l <= r2);
+	if (!lineNos.length) return null;
+
+	const rows = lineNos.map((l) => {
+		const r = parseRow(lines[l])!;
+		// a ragged row is short, not broken: the missing cells read as blank
+		return Array.from({ length: c2 - c1 + 1 }, (_, k) => (c1 + k < r.cellCount ? r.pieces[c1 + k + 1] : "   "));
+	});
+	return {
+		rows,
+		row: rowLines.indexOf(lineNos[0]),
+		col: c1,
+		refs: opts.cut ? "hold" : "shift",
+		cut: !!opts.cut,
+		path: opts.path ?? "",
+		lineNos,
+	};
+}
+
+/** The block as tab-separated text, which is what a spreadsheet reads off the
+ *  clipboard. Wrappers and emphasis markers come off; a tab or a newline inside
+ *  a cell would break the grid it is describing, so those collapse to spaces. */
+export function clipToTsv(clip: CellClip): string {
+	return clip.rows.map((r) => r.map((p) => cellDisplayText(p).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n");
+}
+
+/** A block that came from outside the vault: plain text, and no source
+ *  coordinates to shift a reference against. */
+export function clipFromRows(rows: string[][]): CellClip | null {
+	if (!rows.length) return null;
+	const width = Math.max(...rows.map((r) => r.length), 1);
+	return {
+		rows: rows.map((r) => Array.from({ length: width }, (_, i) => ` ${csvCell((r[i] ?? "").trim())} `)),
+		row: 0,
+		col: 0,
+		refs: "hold",
+		cut: false,
+		path: "",
+		lineNos: [],
+	};
+}
+
+/**
+ * One cell of a paste: what the source contributes and what the destination
+ * keeps, following Excel's paste-special menu.
+ *
+ * Markers describing the column rather than the cell (width, column rules,
+ * table flags) always stay with the destination, the same division Fill Down
+ * makes: they belong to the column, not to whatever landed in it.
+ */
+function pasteCell(srcPiece: string, dstPiece: string, mode: PasteMode, rowD: number, colD: number): string {
+	const s = parseCellContent(srcPiece);
+	const d = parseCellContent(dstPiece);
+	const shift = (f: string) => {
+		let out = f;
+		if (rowD) out = shiftFormulaRefs(out, { axis: "row", kind: "offset", delta: rowD });
+		if (colD) out = shiftFormulaRefs(out, { axis: "col", kind: "offset", delta: colD });
+		return out;
+	};
+	const wrap = (content: string) => (content ? ` ${content} ` : "   ");
+
+	// Formats: the look travels and the value stays put, which is the format
+	// painter's contract applied to a whole block at once.
+	if (mode === "formats") {
+		return wrap(buildCellContent(d.inner, s.bg, s.fg, d.calc, d.formula, s.borders, s.fmt, s.hl, d.w, d.rule, d.tbl));
+	}
+
+	let inner = s.inner;
+	let formula = s.formula ? shift(s.formula) : null;
+	let calc = s.calc;
+	if (mode === "values") {
+		// Values only: a live formula lands as the number it was showing, which
+		// is what Freeze value does to a single cell. A formula typed but not
+		// yet settled has no value to land, so it travels as the formula it
+		// still is, re-pointed rather than left reading someone else's cells.
+		formula = null;
+		calc = null;
+	}
+	if (looksLikeFormula(inner)) inner = shift(inner);
+
+	// Only a whole-cell paste brings the source's look with it; Values and
+	// Formulas land in the destination's own formatting, as they do in Excel.
+	const look = mode === "all" ? s : d;
+	return wrap(
+		buildCellContent(inner, look.bg, look.fg, calc, formula, look.borders, look.fmt, look.hl, d.w, d.rule, d.tbl)
+	);
+}
+
+/** What a cut leaves behind: an empty cell, keeping only the markers that
+ *  describe its column. */
+function emptiedCell(piece: string): string {
+	const p = parseCellContent(piece);
+	const content = buildCellContent("", null, null, null, null, null, null, false, p.w, p.rule, p.tbl);
+	return content ? ` ${content} ` : "   ";
+}
+
+/**
+ * Paste a block at the targeted cell, Excel's way.
+ *
+ * The block's top-left lands on the top-left of what is targeted. A selection
+ * that is a whole multiple of the block tiles it, the way Excel fills a
+ * selection from a smaller copy. A block that runs off the bottom grows the
+ * table, because rows are cheap in Markdown; one that runs off the right is
+ * clamped and the plan says how many cells it had to drop, because columns are
+ * structural and silently widening a table is a bigger surprise than a count.
+ *
+ * A cut's source empties as part of the same edit, so a move is one undo. The
+ * clear runs before the paste on the same working rows, which is what makes an
+ * overlapping move (cut A2:A4, paste at A3) land correctly instead of erasing
+ * what it just wrote.
+ */
+export function planPasteCells(
+	lines: string[],
+	targets: { line: number; col: number }[],
+	clip: CellClip,
+	mode: PasteMode = "all",
+	transpose = false
+): (EditPlan & { pasted: number; clamped: number; added: number; cleared: number }) | null {
+	if (!targets.length || !clip.rows.length) return null;
+	const { start, end, delimIdx } = tableBounds(lines, targets[0].line);
+	if (delimIdx < 0) return null;
+	const inTable = targets.filter((t) => t.line >= start && t.line <= end && t.line !== delimIdx);
+	if (!inTable.length) return null;
+
+	const rowLines: number[] = [];
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) rowLines.push(i);
+	}
+	const top = Math.min(...inTable.map((t) => t.line));
+	const bottom = Math.max(...inTable.map((t) => t.line));
+	const left = Math.min(...inTable.map((t) => t.col));
+	const right = Math.max(...inTable.map((t) => t.col));
+	const anchorIdx = rowLines.indexOf(top);
+	if (anchorIdx < 0) return null;
+
+	// One working copy per line, shared by the clear and the paste so both see
+	// each other's changes and one edit per line comes out at the end.
+	const work = new Map<number, ParsedRow>();
+	const rowFor = (line: number): ParsedRow | null => {
+		const got = work.get(line);
+		if (got) return got;
+		const r = parseRow(lines[line] ?? "");
+		if (!r || r.isDelim) return null;
+		work.set(line, r);
+		return r;
+	};
+
+	// Every cell of the block remembers where it came from: after a transpose no
+	// two cells have travelled the same distance, and that distance is what a
+	// relative reference moves by.
+	const h = clip.rows.length;
+	const w = Math.max(...clip.rows.map((r) => r.length), 1);
+	const bh = transpose ? w : h;
+	const bw = transpose ? h : w;
+	const cellAt = (i: number, j: number) => {
+		const si = transpose ? j : i;
+		const sj = transpose ? i : j;
+		return { piece: clip.rows[si]?.[sj] ?? "   ", row: clip.row + si, col: clip.col + sj };
+	};
+
+	// Excel tiles a copied block over a selection that is a whole multiple of
+	// it, and pastes it once anywhere else.
+	const selRows = rowLines.filter((l) => l >= top && l <= bottom).length;
+	const selCols = right - left + 1;
+	const tall = selRows > bh && selRows % bh === 0 ? selRows / bh : 1;
+	const wide = selCols > bw && selCols % bw === 0 ? selCols / bw : 1;
+	const needRows = bh * tall;
+	const needCols = bw * wide;
+
+	// A cut only clears cells that still hold exactly what was cut. Anything
+	// else and the block has moved since, so clearing would take a bystander
+	// with it; the paste still lands and the plan reports nothing cleared.
+	let cleared = 0;
+	if (clip.cut && clip.lineNos.length === clip.rows.length) {
+		const intact = clip.lineNos.every((ln, i) => {
+			const r = parseRow(lines[ln] ?? "");
+			if (!r || r.isDelim) return false;
+			return clip.rows[i].every((piece, j) => clip.col + j < r.cellCount && r.pieces[clip.col + j + 1] === piece);
+		});
+		if (intact) {
+			clip.lineNos.forEach((ln, i) => {
+				const r = rowFor(ln);
+				if (!r) return;
+				clip.rows[i].forEach((piece, j) => {
+					const c = clip.col + j + 1;
+					const next = emptiedCell(piece);
+					if (r.pieces[c] === next) return;
+					r.pieces[c] = next;
+					cleared++;
+				});
+			});
+		}
+	}
+
+	// Rows the paste lands on: existing ones first, then as many blank ones as
+	// it takes to hold the rest.
+	const width = parseRow(lines[delimIdx])?.cellCount ?? 0;
+	const prefix = parseRow(lines[start])?.prefix ?? "";
+	const dsts: { line: number; row: ParsedRow; insert: boolean }[] = [];
+	for (let k = 0; k < needRows; k++) {
+		const idx = anchorIdx + k;
+		if (idx < rowLines.length) {
+			const r = rowFor(rowLines[idx]);
+			if (!r) return null;
+			dsts.push({ line: rowLines[idx], row: r, insert: false });
+		} else {
+			// every appended row goes in at the same original line, in order,
+			// which is the run of inserts the appliers expect
+			const r = parseRow(emptyRow(prefix, width));
+			if (!r) return null;
+			dsts.push({ line: end + 1, row: r, insert: true });
+		}
+	}
+	const added = dsts.filter((d) => d.insert).length;
+
+	let pasted = 0;
+	let clamped = 0;
+	for (let k = 0; k < needRows; k++) {
+		const d = dsts[k];
+		for (let n = 0; n < needCols; n++) {
+			const dc = left + n;
+			if (dc >= d.row.cellCount) {
+				clamped++;
+				continue;
+			}
+			const src = cellAt(k % bh, n % bw);
+			const rowD = clip.refs === "shift" ? anchorIdx + k - src.row : 0;
+			const colD = clip.refs === "shift" ? dc - src.col : 0;
+			const before = d.row.pieces[dc + 1];
+			const after = pasteCell(src.piece, before, mode, rowD, colD);
+			if (after === before) continue;
+			d.row.pieces[dc + 1] = after;
+			pasted++;
+		}
+	}
+
+	const edits: { line: number; text: string; kind?: EditKind }[] = [];
+	for (const [line, r] of [...work].sort((a, b) => a[0] - b[0])) {
+		const text = r.prefix + r.pieces.join("|");
+		if (text !== lines[line]) edits.push({ line, text });
+	}
+	for (const d of dsts) {
+		if (d.insert) edits.push({ line: d.line, text: d.row.prefix + d.row.pieces.join("|"), kind: "insert" });
+	}
+	if (!edits.length) return null;
+
+	const last = dsts[dsts.length - 1];
+	const lastText = last.insert ? last.row.prefix + last.row.pieces.join("|") : (lines[last.line] ?? "");
+	return {
+		edits,
+		cursorLine: last.line,
+		cursorCh: cursorForCol(lastText, Math.min(left + needCols - 1, last.row.cellCount - 1)),
+		pasted,
+		clamped,
+		added,
+		cleared,
+	};
 }
 
 export function planPrettify(lines: string[], target: CellTargetLoc): (EditPlan & { rows: number }) | null {

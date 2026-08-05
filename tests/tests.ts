@@ -78,6 +78,10 @@ import {
 	blockTargets,
 	fillSeries,
 	planDragFill,
+	planCopyCells,
+	planPasteCells,
+	clipFromRows,
+	clipToTsv,
 	dragFillPreview,
 	shiftFormulaRefs,
 	formulaErrorText,
@@ -1123,6 +1127,88 @@ const SIDE = ["| A | B | C |", "| - | - | - |", "| 5 | =A2*2 | |"];
 const SIDES = applyPlan(SIDE, { edits: recalcCalcs(SIDE.slice()) });
 const fillRight = settle(applyPlan(SIDES, planFill(SIDES.slice(), [{ line: 2, col: 1 }, { line: 2, col: 2 }], "right")));
 ok(fillRight[2].includes("=B2*2") && fillRight[2].includes(">20<"), "fill right shifts the column letter");
+
+// --- copy / cut / paste a block of cells ---
+const CP = [
+	"| Item | Qty | Price | Total |",
+	"| - | - | - | - |",
+	'| <span class="ptb" style="background:#0F0">a</span> | 2 | 10 | =B2*C2 |',
+	"| b | 3 | 20 | |",
+	"| c | 4 | 30 | |",
+	"| d | 5 | 40 | |",
+];
+const CPS = applyPlan(CP, { edits: recalcCalcs(CP.slice()) });
+
+const clip1 = planCopyCells(CPS.slice(), [{ line: 2, col: 3 }])!;
+eq(clip1.rows.length, 1, "a one-cell copy takes one row");
+eq(clip1.row, 1, "and reports its grid row, the header being row 0");
+eq(clip1.refs, "shift", "a copy shifts the references of what it carries");
+const paste1 = settle(applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 3, col: 3 }], clip1)));
+ok(paste1[3].includes("=B3*C3") && paste1[3].includes(">60<"), "pasting a formula one row down re-points it");
+
+const block = planCopyCells(CPS.slice(), [{ line: 2, col: 0 }, { line: 2, col: 1 }, { line: 3, col: 0 }, { line: 3, col: 1 }])!;
+eq(block.rows.length, 2, "a dragged block takes every row it spans");
+eq(block.rows[0].length, 2, "and every column");
+const paste2 = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }], block));
+ok(paste2[4].includes("| a |") || paste2[4].includes(">a<"), "the block's top-left lands on the targeted cell");
+ok(paste2[5].includes("| b |"), "and the rest follows below it");
+ok(paste2[4].includes("#0F0"), "a whole-cell paste carries the fill with it");
+
+// paste special
+const vals = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }], block, "values"));
+ok(!vals[4].includes("#0F0"), "values only leaves the destination's own formatting alone");
+const fcopy = planCopyCells(CPS.slice(), [{ line: 2, col: 3 }])!;
+const valsF = settle(applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 3, col: 3 }], fcopy, "values")));
+ok(!valsF[3].includes("data-f"), "values only drops the formula");
+eq(valsF[3].split("|")[4].trim(), "20", "and lands the number the formula was showing, as plain text");
+const fmts = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }], block, "formats"));
+ok(fmts[4].includes("#0F0") && fmts[4].includes(">c<"), "formats only repaints the cell and keeps its value");
+const forms = settle(applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 3, col: 3 }], fcopy, "formulas")));
+ok(forms[3].includes("=B3*C3"), "formulas only still re-points what it carries");
+
+// transpose
+const strip = planCopyCells(CPS.slice(), [{ line: 2, col: 0 }, { line: 3, col: 0 }, { line: 4, col: 0 }])!;
+const trans = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 5, col: 0 }], strip, "values", true));
+ok(trans[5].includes("| a | b | c |"), "a transposed paste turns the column into a row");
+
+// growing and clamping
+const grow = planPasteCells(CPS.slice(), [{ line: 5, col: 0 }], block)!;
+eq(grow.added, 1, "a block running off the bottom grows the table by what it needs");
+const grown = applyPlan(CPS, grow);
+ok(grown.length === CPS.length + 1 && grown[6].includes("| b |"), "and the new row holds the rest of the block");
+const wide = planCopyCells(CPS.slice(), [{ line: 2, col: 0 }, { line: 2, col: 1 }])!;
+const clamp = planPasteCells(CPS.slice(), [{ line: 3, col: 3 }], wide)!;
+eq(clamp.clamped, 1, "a block running off the right is clamped rather than widening the table");
+
+// tiling, the way Excel fills a selection from a smaller copy
+const one = planCopyCells(CPS.slice(), [{ line: 2, col: 1 }])!;
+const tiled = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 3, col: 1 }, { line: 4, col: 1 }, { line: 5, col: 1 }], one));
+ok(tiled[3].includes("| 2 |") && tiled[5].includes("| 2 |"), "one cell tiles over the whole selection");
+
+// cut
+const cut = planCopyCells(CPS.slice(), [{ line: 2, col: 1 }], { cut: true, path: "n.md" })!;
+eq(cut.refs, "hold", "a cut moves cells, so their references hold still");
+const moved = planPasteCells(CPS.slice(), [{ line: 5, col: 1 }], cut)!;
+eq(moved.cleared, 1, "the source empties as part of the same edit, so a move is one undo");
+const movedLines = applyPlan(CPS, moved);
+ok(movedLines[5].includes("| 2 |"), "the value arrives at the destination");
+ok(/\|\s+\|/.test(movedLines[2].replace(/<[^>]*>/g, "")), "and is gone from where it was");
+const stale = { ...cut, rows: [["  999  "]] };
+eq(planPasteCells(CPS.slice(), [{ line: 5, col: 1 }], stale)!.cleared, 0, "a cut whose source has changed since pastes without clearing anything");
+
+// an overlapping move has to clear before it writes, or it erases itself
+const ov = planCopyCells(CPS.slice(), [{ line: 2, col: 1 }, { line: 3, col: 1 }], { cut: true, path: "n.md" })!;
+const ovLines = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 3, col: 1 }], ov)!);
+ok(ovLines[3].includes("| 2 |") && ovLines[4].includes("| 3 |"), "an overlapping cut-paste lands what it moved");
+ok(/\|\s+\|/.test(ovLines[2]), "and clears only the part it left behind");
+
+// text arriving from outside
+const outside = clipFromRows([["x", "1"], ["y", "2"]])!;
+eq(outside.refs, "hold", "text from outside has no source coordinates to shift against");
+const pasted = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }], outside));
+ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as plain values");
+eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
+eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
 
 // --- operators: ^ & % ---
 const errOf = (f: () => unknown): string => {
