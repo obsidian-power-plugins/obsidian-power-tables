@@ -691,25 +691,20 @@ tr.ptb-fhidden {
    content inside a block of its own and an inline ::before ahead of a block
    lands on its own line above the value. Absolute is the same answer the funnel
    and the picker chevron already use, and it holds in both views. */
-/* The gap for the icon is made with text-indent, not padding, and that is the
-   whole trick. The editor sets the padding shorthand on its cells at a
-   specificity a longhand padding-left cannot beat without !important, which
-   this stylesheet does not use; nothing anywhere sets text-indent on a table
-   cell, so there is no argument to lose. It inherits too, which matters because
-   Live Preview puts a cell's content inside a block of its own: the indent
-   reaches that block's first line, which is exactly the line the icon sits on. */
-:is(.markdown-rendered, .cm-table-widget) :is(td, th)[data-ptb-icon] {
-	position: relative;
-	text-indent: 20px;
-}
+/* Floated, after absolute positioning and after reserving space with padding
+   and with text-indent all failed to keep the glyph off the value.
 
+   The reason to float rather than guess again at the cell's internals: a float
+   cannot land on top of text. It is removed from flow but still reserves its
+   width, so line boxes beside it shorten, and a sibling that establishes its
+   own block formatting context is pushed aside whole instead. Both outcomes are
+   legible. Absolute positioning had the opposite property: when its containing
+   block turned out not to be the cell, it put the icon exactly where the value
+   already was and hid the minus sign in front of a negative number. */
 [data-ptb-icon]::before {
-	position: absolute;
-	top: 50%;
-	left: 5px;
-	transform: translateY(-50%);
+	float: left;
+	margin-right: 5px;
 	font-size: 0.85em;
-	line-height: 1;
 }
 
 [data-ptb-icon="arrows-0"]::before {
