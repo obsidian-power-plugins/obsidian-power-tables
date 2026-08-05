@@ -18,6 +18,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
 - Copy, cut and paste a block of cells with Ctrl+C/X/V, formulas and formatting included, plus paste special: values, formulas, formats, transpose
+- Excel's selection keys: Shift+arrows to extend, Ctrl+arrows to the edge of the data, Ctrl+Space and Shift+Space for the column and the row, without taking the keys typing needs
 - Fill down and fill right over a selection, with `$B$2` anchoring to pin what shouldn't travel
 - A formula bar that completes function names and takes references by clicking cells, and Excel's error values (`#VALUE!` `#NAME?` `#REF!` `#N/A` `#DIV/0!`) so a broken formula says what broke
 - A selection bar whenever you drag-select cells: column alignment right there, plus Sum, Avg, Count and one-click AutoSum when the cells are numbers
@@ -77,6 +78,27 @@ The reference guides are the selection handles, the way a spreadsheet's column l
 - **Press the corner box**, above the row numbers and left of the letters, to take the whole table.
 - Whatever you take is an ordinary selection: colors, text styles, alignment, borders, number formats, Fill down/right, AutoSum and Clear values all act on every cell of it, and the selection bar shows Sum, Avg and Count for it. In Live Preview it is Obsidian's own table selection, so copy, cut and Delete work on it too.
 - The **column resize band wins over the letter it crosses**, exactly as those same pixels do in Excel: the few pixels either side of a column divider still resize, and the rest of the letter selects.
+
+### Selecting from the keyboard
+
+In Live Preview, the selection keys are Excel's. Reading view has no cursor, so there is nothing to extend from there.
+
+| | |
+| --- | --- |
+| **Shift+arrows** | extend the selection a cell at a time |
+| **Ctrl+arrows** | jump to the edge of the data: along a run to its last cell, or over a gap to the next thing there is |
+| **Ctrl+Shift+arrows** | extend all the way to that edge |
+| **Ctrl+Space** | take the whole column |
+| **Shift+Space** | take the whole row |
+| **Ctrl+Shift+Space**, **Ctrl+A** | take the whole table |
+
+Whatever you take is an ordinary selection, so colors, number formats, Fill down, AutoSum, copy and Delete all act on it, and the selection bar shows Sum, Avg and Count.
+
+**These keys still belong to the text first.** A table cell is a text editor, and Shift+Right selecting the next letter matters more than Shift+Right selecting the next cell. So the sideways keys stay with the text until the caret runs out of it: Shift+Right selects letters to the end of the cell and then starts taking cells, and Ctrl+Left goes on jumping words while there are words to jump. Up and down never had a text meaning to take away, a cell being a single line, so those always take cells. Once a block is selected, all of them take cells. An empty cell is at both ends of its text at once, so a fresh table behaves like a grid straight away.
+
+Shift+Space defers the same way, because holding Shift through the space of "Hello World" is a slip worth forgiving. **Ctrl+A** takes the table on the first press and falls through to Obsidian on the second, so selecting the whole note from inside a table still works, which is also how Excel escalates.
+
+Rows an AutoFilter is hiding are stepped over rather than through, so the keys move between the rows you can actually see.
 
 ### The fill handle
 
