@@ -26,6 +26,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
 - Data validation: give a column its list of values and every cell gets a picker, so a status column is a click
+- Cleanup commands: remove duplicate rows, text to columns, transpose, and find and replace within one table
 - Summarize: group by one column, aggregate another, and get the answer as a plain Markdown table everything else still works on
 - Excel's AutoFilter: a funnel on every column header, ticking values or taking a condition, stored in the note so a filtered view is still there tomorrow
 - CSV/Excel import and export, table prettifier, Excel-style cell reference guides that select the column or row they label
@@ -276,6 +277,17 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 - Rows move as whole lines, so **colors and live calcs travel with their rows**, and any row containing a live calc (your Total row) stays **pinned to the bottom**.
 - The same menu has **Move row up/down** and **Move column left/right**; column moves carry the alignment row along.
 
+### Cleaning up a table
+
+Four commands for the things people paste data into Excel to do. All of them are on the table menu, in the panel's Data section, and in the command palette.
+
+- **Remove duplicate rows…** ticks every column to begin with; untick the ones that should not count, like a row number or a free-text note, so that "the same customer" can mean two columns rather than all of them. The first of each set stays and matching ignores case, both of which are Excel's rules.
+- **Text to columns…** splits the targeted column on a separator (space, comma, semicolon, tab, hyphen, or anything you type), adding columns to its right for the extra pieces. The widest value decides how many get added. What lands is text: a piece of a split value has no formula to keep.
+- **Transpose table** swaps rows and columns. **Formulas are frozen to their values first**, because a transposed reference does not point where it pointed: `=SUM(B2:B5)` reads a column, and after the swap that column is a row somewhere else entirely. A number that was right beats a formula that is wrong.
+- **Find and replace in table…** works on that table only, with match case and whole-cell options. **Cells holding formulas are skipped**: a formula is code, and replacing "cat" everywhere would otherwise rewrite `=CONCAT` into something that is not a function. Matching is literal, so searching for `$1` or `a.b` means those characters.
+
+Removing rows and adding columns go through the same plans the row and column commands use, so **formulas follow**: a formula pointing at a row that Remove duplicates took away reads `#REF!` rather than quietly pointing at its neighbour, and one referencing a column that Text to columns pushed right follows the letter.
+
 ### Summarize (a pivot whose output is a table)
 
 **Summarize…** (the panel's Data section, the table menu, or the command palette) groups the rows by one column and aggregates another, writing the answer as a new table below the source. Pick the two columns by their own header names and one of Sum, Count, Average, Min or Max.
@@ -298,7 +310,7 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 
 **Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
 
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*, *Data validation (column list)…*, *Summarize table…*.
+Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*, *Data validation (column list)…*, *Summarize table…*, *Remove duplicate rows…*, *Text to columns…*, *Transpose table*, *Find and replace in table…*.
 
 ### On mobile
 
