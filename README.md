@@ -17,6 +17,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Live totals and Excel-style formulas: 41 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
+- Copy, cut and paste a block of cells with Ctrl+C/X/V, formulas and formatting included, plus paste special: values, formulas, formats, transpose
 - Fill down and fill right over a selection, with `$B$2` anchoring to pin what shouldn't travel
 - A formula bar that completes function names and takes references by clicking cells, and Excel's error values (`#VALUE!` `#NAME?` `#REF!` `#N/A` `#DIV/0!`) so a broken formula says what broke
 - A selection bar whenever you drag-select cells: column alignment right there, plus Sum, Avg, Count and one-click AutoSum when the cells are numbers
@@ -92,6 +93,28 @@ What lands depends on what you dragged from, the way it does in a spreadsheet:
 Drag **up or left** and the series runs backwards. Select several columns and each fills its own series independently, so a Date column and an Amount column dragged together do not contaminate each other. The whole drag is **one edit**, so it is one undo however many cells it covered, and the source cell's colors, borders and number format travel with it.
 
 The fill writes into rows the table already has; it will not grow the table, so add rows first (right-click → *Insert row below*, or the panel's Data section) if you are filling past the end. Turn the handle off in Settings → **Fill handle**.
+
+### Copy, cut and paste cells
+
+Select a block and press **Ctrl+C**, then click where it should go and press **Ctrl+V**. The block's top-left lands on the cell you targeted, and the whole cell travels: value, formula, colors, borders and number format. **Ctrl+X** cuts. Everything is also on the right-click menu, in the panel's Data section, and in the command palette as *Copy cells*, *Cut cells* and *Paste cells*, which is where to give them a hotkey.
+
+- **Formulas re-point themselves.** A copied `=C2-B2` pasted a row down becomes `=C3-B3`, and `$B$2` holds still, exactly as with Fill down. A **cut** is different, and different in the way Excel is: it moves the cells rather than copying them, so their references keep pointing where they already pointed.
+- **A cut clears its source when the paste lands**, not when you press Ctrl+X, so a move is one undo and a cut you never paste costs you nothing. If those cells changed in between, the paste still lands and the source is left alone rather than clearing whatever sits there now. A cut only takes its source with it inside the note it came from.
+- **Rows grow, columns clamp.** A block that runs off the bottom adds the rows it needs. One that runs off the right side is trimmed and says how many cells it dropped, because a Markdown table's column count is fixed by its divider row.
+- **A selection that is a whole multiple of the block tiles it**, so one cell copied and pasted over ten fills all ten, the same as in Excel.
+- **Ctrl+C also lands in Excel.** The copy puts plain tab-separated text on the system clipboard alongside the block it keeps for itself, so the same press pastes into Excel, Sheets, or anywhere else. Going the other way, tab-separated or multi-line text pasted into a table spreads across cells from the targeted one instead of piling into it.
+
+**Paste special** (right-click → *Paste special…*, the panel's *Paste…*, or its own commands) is Excel's menu:
+
+| | |
+| --- | --- |
+| **All** | the whole cell, look included |
+| **Values** | the numbers only. A live formula lands as the number it was showing, and the destination keeps its own formatting |
+| **Formulas** | the formulas, re-pointed to where they land, into the destination's own formatting |
+| **Formats** | the colors, borders and number format, leaving every value where it is |
+| **Transpose** | the block rotated, so a column becomes a row |
+
+Column widths, conditional color rules and per-table appearance flags never travel: they describe the column rather than the cell that landed in it, which is the same division Fill down makes.
 
 ### Checkboxes, highlights & column widths
 
@@ -169,7 +192,7 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 
 **Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
 
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*.
+Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*.
 
 ### On mobile
 
@@ -200,7 +223,7 @@ The community catalog scans a plugin for what it is *capable* of, which is not t
 
 | What the scan reports | What it is | Where |
 | --- | --- | --- |
-| **Clipboard access** | **Writing:** the CSV from **Copy table as CSV**, and a diagnostic report from the troubleshooting command. **Reading:** the **Paste rows** command, its table-menu entry, and its toolbar button, which take spreadsheet rows off the clipboard and append them to the table you targeted. Every one of the five is something you just clicked or ran. Nothing reads the clipboard on its own, on a timer, or in the background. | [`src/main.ts`](src/main.ts) `pasteFromClipboard`, `copyTableCsv` |
+| **Clipboard access** | **Writing:** the CSV from **Copy table as CSV**, the tab-separated text from **Copy cells** and **Cut cells**, and a diagnostic report from the troubleshooting command. **Reading:** **Paste cells** and **Paste rows**, which take spreadsheet rows off the clipboard and put them in the table you targeted. Every one of them is something you just clicked, ran, or pressed Ctrl+C/X/V for; the Ctrl+C/X/V handlers stand down unless a table selection is live, and hand the event straight back to Obsidian otherwise. Nothing reads the clipboard on its own, on a timer, or in the background. | [`src/main.ts`](src/main.ts) `copyCells`, `pasteCells`, `pasteFromClipboard`, `copyTableCsv` |
 
 Power Tables makes no network requests of any kind, starts no processes, reads no files outside your vault, and never asks Obsidian for a list of your files. There is no `eval`, no `Function` constructor, no `innerHTML`, and no code fetched and run at runtime.
 
