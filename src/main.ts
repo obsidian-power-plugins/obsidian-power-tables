@@ -75,6 +75,10 @@ import {
 	planClearFilters,
 	planSetColumnList,
 	planSummarize,
+	planRemoveDuplicates,
+	planTranspose,
+	planTextToColumns,
+	planFindReplace,
 	SummaryFn,
 	normalizeText,
 	columnListAt,
@@ -719,6 +723,10 @@ export default class PowerTablesPlugin extends Plugin {
 		});
 		this.addCommand({ id: "copy-csv", icon: "copy", name: "Copy table as CSV", callback: () => void this.copyTableCsv() });
 		this.addCommand({ id: "edit-formula", icon: "calculator", name: "Edit cell value / formula…", callback: () => this.openFormulaModal() });
+		this.addCommand({ id: "dedupe", icon: "copy-minus", name: "Remove duplicate rows…", callback: () => this.openDedupeModal() });
+		this.addCommand({ id: "transpose", icon: "flip-horizontal-2", name: "Transpose table", callback: () => void this.transposeTable() });
+		this.addCommand({ id: "text-to-columns", icon: "split-square-horizontal", name: "Text to columns…", callback: () => this.openSplitModal() });
+		this.addCommand({ id: "find-replace", icon: "replace", name: "Find and replace in table…", callback: () => this.openReplaceModal() });
 		this.addCommand({ id: "summarize", icon: "table-2", name: "Summarize table…", callback: () => this.openSummarizeModal() });
 		this.addCommand({ id: "rule-modal", icon: "palette", name: "Conditional color rule…", callback: () => this.openRulesModal() });
 		this.addCommand({ id: "format-cells", icon: "paintbrush", name: "Format cells…", callback: () => this.openFormatModal() });
@@ -1847,6 +1855,65 @@ export default class PowerTablesPlugin extends Plugin {
 		const tgt = this.targetFromCell(cell);
 		if (tgt) apply(tgt);
 		else void this.fallbackTargetFromCell(cell).then((fb) => fb && apply(fb));
+	}
+
+	/* ---------------- cleanup ---------------- */
+
+	async transposeTable() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		const plan = await this.runPlan(t, (lines) => planTranspose(lines, t));
+		if (!plan) {
+			new Notice("Power Tables: that table has nothing to transpose.");
+			return;
+		}
+		new Notice(`Transposed: ${plan.rows} row${plan.rows === 1 ? "" : "s"}. Formulas were frozen to their values.`);
+	}
+
+	openDedupeModal() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		const heads = this.headerTexts(t);
+		if (!heads.length) return;
+		new DedupeModal(this.app, this, t, heads).open();
+	}
+
+	async removeDuplicates(target: CellTarget, cols: number[]) {
+		const plan = await this.runPlan(target, (lines) => planRemoveDuplicates(lines, target, cols));
+		if (!plan) return;
+		new Notice(
+			plan.removed
+				? `${plan.removed} duplicate row${plan.removed === 1 ? "" : "s"} removed.`
+				: "No duplicate rows on those columns."
+		);
+	}
+
+	openSplitModal() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		new TextToColumnsModal(this.app, this, t).open();
+	}
+
+	async textToColumns(target: CellTarget, delim: string) {
+		const plan = await this.runPlan(target, (lines) => planTextToColumns(lines, target, delim));
+		if (!plan) return;
+		new Notice(
+			plan.added
+				? `Split into ${plan.added + 1} columns; ${plan.split} cell${plan.split === 1 ? "" : "s"} had something to split.`
+				: "Power Tables: nothing in that column contains that separator."
+		);
+	}
+
+	openReplaceModal() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		new FindReplaceModal(this.app, this, t).open();
+	}
+
+	async findReplace(target: CellTarget, find: string, replace: string, opts: { matchCase: boolean; wholeCell: boolean }) {
+		const plan = await this.runPlan(target, (lines) => planFindReplace(lines, target, find, replace, opts));
+		if (!plan) return;
+		new Notice(plan.hits ? `${plan.hits} cell${plan.hits === 1 ? "" : "s"} changed.` : "Nothing in this table matched.");
 	}
 
 	/* ---------------- summarize ---------------- */
@@ -4289,6 +4356,10 @@ export default class PowerTablesPlugin extends Plugin {
 			["Clear filters", "filter-x", () => void this.clearFilters()],
 			["Data validation…", "list-checks", () => this.openListModal()],
 			["Summarize…", "table-2", () => this.openSummarizeModal()],
+			["Remove duplicates…", "copy-minus", () => this.openDedupeModal()],
+			["Text to columns…", "split-square-horizontal", () => this.openSplitModal()],
+			["Find and replace…", "replace", () => this.openReplaceModal()],
+			["Transpose table", "flip-horizontal-2", () => void this.transposeTable()],
 			["Copy cells", "copy", () => void this.copyCells()],
 			["Cut cells", "scissors", () => void this.copyCells(true)],
 			["Paste cells", "clipboard-paste", () => void this.pasteCells()],
@@ -5412,6 +5483,8 @@ class PanelUI {
 		);
 		this.dataBtn(dgrid, "Copy CSV", "Copy the table to the clipboard as CSV", () => void this.plugin.copyTableCsv());
 		this.dataBtn(dgrid, "Rules…", "Conditional color rule for the targeted column", () => this.plugin.openRulesModal());
+		this.dataBtn(dgrid, "Dedupe…", "Remove rows that repeat an earlier one", () => this.plugin.openDedupeModal());
+		this.dataBtn(dgrid, "Replace…", "Find and replace text throughout this table", () => this.plugin.openReplaceModal());
 		this.dataBtn(dgrid, "Summarize…", "Group the rows by one column and aggregate another into a new table", () =>
 			this.plugin.openSummarizeModal()
 		);
@@ -5923,6 +5996,146 @@ class SummarizeModal extends Modal {
 		btns.createEl("button", { text: "Insert summary", cls: "mod-cta" }).addEventListener("click", () => {
 			this.close();
 			void this.plugin.summarize(this.target, this.group, this.value, this.fn);
+		});
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
+/** Which columns decide that two rows are the same. All of them to begin with,
+ *  which is Excel's default and is the safe one: it removes least. */
+class DedupeModal extends Modal {
+	private cols: Set<number>;
+
+	constructor(app: App, private plugin: PowerTablesPlugin, private target: CellTarget, private heads: string[]) {
+		super(app);
+		this.cols = new Set(heads.map((_, i) => i));
+	}
+
+	onOpen() {
+		this.titleEl.setText("Remove duplicate rows");
+		floatModal(this);
+		const { contentEl } = this;
+		contentEl.createEl("p", {
+			cls: "ptb-modal-desc",
+			text:
+				"Rows repeating an earlier one on every ticked column are removed; the first of each set stays. " +
+				"Matching ignores case. Untick a column that should not count, like a row number or a note.",
+		});
+		const list = contentEl.createDiv({ cls: "ptb-flist" });
+		this.heads.forEach((h, i) => {
+			const row = list.createEl("label", { cls: "ptb-fitem" });
+			const box = row.createEl("input", { attr: { type: "checkbox" } });
+			box.checked = true;
+			row.createSpan({ cls: "ptb-fitem-t", text: h || colLetter(i) });
+			box.addEventListener("change", () => (box.checked ? this.cols.add(i) : this.cols.delete(i)));
+		});
+		const btns = contentEl.createDiv({ cls: "ptb-modal-btns" });
+		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		btns.createEl("button", { text: "Remove duplicates", cls: "mod-cta" }).addEventListener("click", () => {
+			if (!this.cols.size) {
+				new Notice("Tick at least one column to compare.");
+				return;
+			}
+			this.close();
+			void this.plugin.removeDuplicates(this.target, [...this.cols].sort((a, b) => a - b));
+		});
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
+/** The separator to split the targeted column on. */
+class TextToColumnsModal extends Modal {
+	private delim = " ";
+
+	constructor(app: App, private plugin: PowerTablesPlugin, private target: CellTarget) {
+		super(app);
+	}
+
+	onOpen() {
+		this.titleEl.setText("Text to columns");
+		floatModal(this);
+		const { contentEl } = this;
+		contentEl.createEl("p", {
+			cls: "ptb-modal-desc",
+			text:
+				"Splits the targeted column on a separator, adding columns to its right for the extra pieces. " +
+				"The widest value decides how many are added, and what lands is text.",
+		});
+		let custom: HTMLInputElement;
+		new Setting(contentEl).setName("Separator").addDropdown((d) =>
+			d
+				.addOptions({ " ": "Space", ",": "Comma", ";": "Semicolon", "\t": "Tab", "-": "Hyphen", other: "Other…" })
+				.setValue(" ")
+				.onChange((v) => {
+					this.delim = v === "other" ? custom.value : v;
+					custom.toggleClass("ptb-fhide", v !== "other");
+				})
+		);
+		custom = contentEl.createEl("input", {
+			cls: "ptb-fsearch ptb-fhide",
+			attr: { type: "text", placeholder: "Separator" },
+		});
+		custom.addEventListener("input", () => (this.delim = custom.value));
+		const btns = contentEl.createDiv({ cls: "ptb-modal-btns" });
+		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		btns.createEl("button", { text: "Split", cls: "mod-cta" }).addEventListener("click", () => {
+			if (!this.delim) {
+				new Notice("Enter a separator to split on.");
+				return;
+			}
+			this.close();
+			void this.plugin.textToColumns(this.target, this.delim);
+		});
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
+class FindReplaceModal extends Modal {
+	private find = "";
+	private replace = "";
+	private matchCase = false;
+	private wholeCell = false;
+
+	constructor(app: App, private plugin: PowerTablesPlugin, private target: CellTarget) {
+		super(app);
+	}
+
+	onOpen() {
+		this.titleEl.setText("Find and replace in this table");
+		floatModal(this);
+		const { contentEl } = this;
+		contentEl.createEl("p", {
+			cls: "ptb-modal-desc",
+			text: "Only this table, and only cells holding text: a cell with a formula in it is left alone.",
+		});
+		new Setting(contentEl).setName("Find").addText((t) => t.onChange((v) => (this.find = v)));
+		new Setting(contentEl).setName("Replace with").addText((t) => t.onChange((v) => (this.replace = v)));
+		new Setting(contentEl).setName("Match case").addToggle((t) => t.onChange((v) => (this.matchCase = v)));
+		new Setting(contentEl)
+			.setName("Whole cell only")
+			.setDesc("Replace only where the cell is exactly what you searched for")
+			.addToggle((t) => t.onChange((v) => (this.wholeCell = v)));
+		const btns = contentEl.createDiv({ cls: "ptb-modal-btns" });
+		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		btns.createEl("button", { text: "Replace all", cls: "mod-cta" }).addEventListener("click", () => {
+			if (!this.find) {
+				new Notice("Enter something to find.");
+				return;
+			}
+			this.close();
+			void this.plugin.findReplace(this.target, this.find, this.replace, {
+				matchCase: this.matchCase,
+				wholeCell: this.wholeCell,
+			});
 		});
 	}
 
