@@ -24,6 +24,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Sorting that understands numbers, currency, and dates; row and column moves; insert, delete, duplicate
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
+- Excel's AutoFilter: a funnel on every column header, ticking values or taking a condition, stored in the note so a filtered view is still there tomorrow
 - CSV/Excel import and export, table prettifier, Excel-style cell reference guides that select the column or row they label
 - Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
 
@@ -116,6 +117,25 @@ Select a block and press **Ctrl+C**, then click where it should go and press **C
 
 Column widths, conditional color rules and per-table appearance flags never travel: they describe the column rather than the cell that landed in it, which is the same division Fill down makes.
 
+### AutoFilter
+
+Turn it on (Settings → **AutoFilter**, or the panel's **View → Filter** for one table) and every column header grows Excel's funnel button. Click it for that column's dropdown:
+
+- **Sort A→Z / Z→A** at the top, the same sort the panel does, so the thing you reach for first is where you are already looking.
+- **Filter by value**: every distinct value in the column with the number of rows behind each, ticked to keep. There is a search box for finding one in a column of hundreds, and **(Select all)** ticks what the search is showing rather than everything, which is what makes it useful there. Blanks are listed as **(blank)** and can be filtered like any other value.
+- **Conditions**: contains, begins with, ends with, equals, greater than, less than, between (`10 ~ 20`), is empty, is not empty. They are the same operators the conditional color rules use, so they mean there what they mean here.
+- **Clear** takes the filter off the column; *Clear all filters in this table* (command palette, or the panel's Data section) takes off every one.
+
+Changes land on **OK**, not on every tick, because the filter is stored in the note and a write per checkbox would be exactly that.
+
+**A funnel in the accent color means that column is filtering.** It is the only sign on screen that rows are missing, so it is worth knowing. Columns combine with AND: a row has to pass every filter to stay.
+
+**What is stored, and what isn't.** Filtering hides rows on screen and never rewrites one. The only thing written is the filter itself, one `data-flt` attribute on the column's header cell, next to the width and color rules that already live there. That means a filtered view survives closing the note, and travels with the file to your other devices; it also survives sorting and column moves, because the header cell moves with its column. Take the plugin away and every row is simply visible again.
+
+A value list stores whichever side is shorter, the values shown or the values hidden, and that also decides what a value arriving later does: untick two of forty and new arrivals keep showing, tick one of forty and they do not. That is the same rule Excel follows, and storing the shorter side picks it on its own.
+
+Two things worth knowing. Row numbers in the guides skip where rows are hidden, the way a spreadsheet's do, because a hidden row is still a row of the file. And a live `=SUM(B:B)` totals the whole column whether or not rows are hidden, exactly as `SUM` does in Excel; it is `SUBTOTAL` that respects a filter there, and that function is not here yet.
+
 ### Checkboxes, highlights & column widths
 
 - **Checkboxes**: the ☑ button in the Text row adds `[ ]` to the cell (follows Apply to, so a column of todos is one click). Cells starting with `[ ]` / `[x]` render as **real checkboxes**: tick them in Reading view (or unfocused Live Preview cells) and the markdown updates itself. The markdown stays a plain `[x] Buy milk`.
@@ -192,7 +212,7 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 
 **Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
 
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*.
+Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*.
 
 ### On mobile
 
@@ -207,7 +227,7 @@ Everything renders and edits on phones and tablets; notes colored on desktop loo
 - **Header fill**: paint every table's header row with one color, chosen via the swatch next to the toggle (on by default, soft blue). It's pure styling (no files change) and per-cell header colors you set explicitly still win over it. **Header fill in dark mode** keeps a separate color for dark themes.
 - **Palette (dark mode)**: optional second swatch set used while the app is in dark mode (the panel re-reads it when the theme flips); leave empty to use one palette everywhere.
 - **Sticky headers**: the header row stays pinned while a long table scrolls, in both Reading view and Live Preview (on by default).
-- **Filter row**: a type-to-filter box under each column header in Reading view (off by default; flip it on globally here, or per table with the panel's Filter button). Matching is case-insensitive contains, multiple boxes combine, Esc clears a box. Filtering only hides rows on screen. The note never changes. Striped tinting follows the original row positions, so stripes can look uneven while a filter is active.
+- **AutoFilter**: a filter button on every column header, in both Reading view and Live Preview (off by default; flip it on globally here, or per table with the panel's Filter button). See [AutoFilter](#autofilter). Striped tinting follows the original row positions, so stripes can look uneven while a filter is active.
 - The panel's **This table** buttons (Guides / Striped / Compact / Header / Sticky / Filter) override those appearance settings for just the targeted table. The override is stored in the note like everything else, so it travels with the file and survives sorts and column moves; toggling a table back to the global state removes it.
 - **Palette**: comma-separated hex codes shown 8 per row (up to 32).
 - **Open floating panel on startup**
