@@ -14,7 +14,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 ## Features at a glance
 
 - Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column
-- Live totals and Excel-style formulas: 41 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
+- Live totals and Excel-style formulas: 42 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
 - Copy, cut and paste a block of cells with Ctrl+C/X/V, formulas and formatting included, plus paste special: values, formulas, formats, transpose
@@ -134,7 +134,11 @@ Changes land on **OK**, not on every tick, because the filter is stored in the n
 
 A value list stores whichever side is shorter, the values shown or the values hidden, and that also decides what a value arriving later does: untick two of forty and new arrivals keep showing, tick one of forty and they do not. That is the same rule Excel follows, and storing the shorter side picks it on its own.
 
-Two things worth knowing. Row numbers in the guides skip where rows are hidden, the way a spreadsheet's do, because a hidden row is still a row of the file. And a live `=SUM(B:B)` totals the whole column whether or not rows are hidden, exactly as `SUM` does in Excel; it is `SUBTOTAL` that respects a filter there, and that function is not here yet.
+**Copying a filtered table takes only what you can see**, the way Excel copies a filtered range. It matters for the selections you can make without looking at the rows, like pressing a column's guide letter. Formulas still land pointing at the right cells: a copied block can have a hole in the middle of it, and each row moves by the distance it actually travelled.
+
+**Totals under a filter use `SUBTOTAL`.** A live `=SUM(B:B)` totals the whole column whether or not rows are hidden, exactly as `SUM` does in Excel. `SUBTOTAL(9, B2:B20)` is the one that skips what a filter is hiding, and **Insert totals row** writes it for you when the table is already filtering, which is what AutoSum does in Excel. Codes 1 to 11 and 101 to 111 both work and read the same here, there being no hiding rows by hand to tell apart. Turning a filter on *after* a totals row exists does not rewrite it; change the cell to `SUBTOTAL` yourself, or delete the row and insert it again.
+
+Row numbers in the guides skip where rows are hidden, the way a spreadsheet's do, because a hidden row is still a row of the file.
 
 ### Checkboxes, highlights & column widths
 
@@ -166,6 +170,7 @@ Cells can hold Excel-style formulas. Type `=SUM(B2:B4)` (or `=C2*1.08`, `=AVG(B2
 | | |
 |---|---|
 | Math and stats | `SUM` `AVG`/`AVERAGE` `MIN` `MAX` `MEDIAN` `PRODUCT` `SUMPRODUCT` `STDEV` `POWER` `SQRT` `INT` `MOD` `ABS` `ROUND` `ROUNDUP` `ROUNDDOWN` |
+| Filtered totals | `SUBTOTAL(9, B2:B20)`, and the other function codes, which skip what an [AutoFilter](#autofilter) is hiding |
 | Counting | `COUNT` `COUNTA` `COUNTBLANK` |
 | Conditional | `IF` `IFERROR` `AND` `OR` `NOT` `SUMIF` `COUNTIF` `AVERAGEIF` |
 | Text | `LEN` `LEFT` `RIGHT` `MID` `TRIM` `UPPER` `LOWER` `CONCAT` |
