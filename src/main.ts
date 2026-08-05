@@ -71,9 +71,17 @@ import {
 	planDrawBorders,
 	planFill,
 	planPasteCells,
+	planSetColumnFilter,
+	planClearFilters,
+	parseFilterTag,
+	filterHit,
+	fltSafe,
+	fltValue,
 	clipFromRows,
 	clipToTsv,
 	CellClip,
+	ColFilter,
+	FilterOp,
 	PasteMode,
 	planFormatCells,
 	planMulti,
@@ -182,6 +190,37 @@ function colLetter(n: number): string {
 		n = Math.floor(n / 26) - 1;
 	} while (n >= 0);
 	return s;
+}
+
+/** What a rendered cell reads as, which is what a filter matches against. The
+ *  guides and the funnel are injected elements carrying no text of their own,
+ *  so they cost nothing here. */
+function cellText(cell: HTMLTableCellElement | undefined): string {
+	return (cell?.textContent ?? "").trim();
+}
+
+/** A filter in one short phrase, for the funnel's tooltip. */
+function filterLabel(f: ColFilter): string {
+	const names: Record<FilterOp, string> = {
+		in: "showing",
+		ex: "hiding",
+		gt: "greater than",
+		lt: "less than",
+		eq: "equals",
+		contains: "contains",
+		starts: "begins with",
+		ends: "ends with",
+		between: "between",
+		empty: "is empty",
+		notempty: "is not empty",
+	};
+	if (f.op === "empty" || f.op === "notempty") return names[f.op];
+	const vals = f.value.split("~").filter(Boolean);
+	if (f.op === "in" || f.op === "ex") {
+		const head = vals.slice(0, 3).join(", ");
+		return `${names[f.op]} ${head}${vals.length > 3 ? ` and ${vals.length - 3} more` : ""}`;
+	}
+	return `${names[f.op]} ${f.value}`;
 }
 
 interface PowerTablesSettings {
@@ -500,6 +539,8 @@ export default class PowerTablesPlugin extends Plugin {
 	 *  somebody else's data that has to land as values. */
 	private clip: CellClip | null = null;
 	private clipText = "";
+	/** The open AutoFilter dropdown, if any. Only ever one. */
+	private filterMenu: HTMLElement | null = null;
 	fmtModal: FormatCellsModal | null = null;
 	private hiderView = buildTagHider(this);
 	private hiderExtension = [hiderInstalled.of(true), this.hiderView];
@@ -535,6 +576,16 @@ export default class PowerTablesPlugin extends Plugin {
 			id: "fill-right", icon: "arrow-right-to-line",
 			name: "Fill right",
 			callback: () => void this.fill("right"),
+		});
+		this.addCommand({
+			id: "filter-column", icon: "list-filter",
+			name: "Filter this column…",
+			callback: () => this.openFilterForTarget(),
+		});
+		this.addCommand({
+			id: "clear-filters", icon: "filter-x",
+			name: "Clear all filters in this table",
+			callback: () => void this.clearFilters(),
 		});
 		this.addCommand({ id: "copy-cells", icon: "copy", name: "Copy cells", callback: () => void this.copyCells() });
 		this.addCommand({ id: "cut-cells", icon: "scissors", name: "Cut cells", callback: () => void this.copyCells(true) });
@@ -713,7 +764,6 @@ export default class PowerTablesPlugin extends Plugin {
 				// per-table appearance classes are wiped with every re-render;
 				// re-apply here so Reading view never flashes the global look
 				this.applyFlagClasses(table);
-				this.renderFilterRow(table);
 			});
 		});
 
@@ -857,6 +907,14 @@ export default class PowerTablesPlugin extends Plugin {
 		this.registerDomEvent(document, "pointerdown", (evt) => this.onGuideDown(evt), { capture: true });
 		// the fill handle, on the same terms: the press must not reach the cell
 		this.registerDomEvent(document, "pointerdown", (evt) => this.onFillDown(evt), { capture: true });
+		// and the funnel, which opens the column's filter instead of editing the header
+		this.registerDomEvent(document, "pointerdown", (evt) => this.onFunnelDown(evt), { capture: true });
+		// a press anywhere else puts the dropdown away, the way a menu behaves
+		this.registerDomEvent(document, "pointerdown", (evt) => {
+			if (!this.filterMenu) return;
+			if (evt.target instanceof Element && evt.target.closest(".ptb-fdrop, .ptb-funnel")) return;
+			this.closeFilterMenu();
+		});
 		this.registerDomEvent(document, "focusin", (evt) => {
 			if (evt.target instanceof Element && evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.updatePanels();
 		});
@@ -867,6 +925,13 @@ export default class PowerTablesPlugin extends Plugin {
 		this.registerDomEvent(document, "copy", (evt) => this.onClipboardCopy(evt, false), { capture: true });
 		this.registerDomEvent(document, "cut", (evt) => this.onClipboardCopy(evt, true), { capture: true });
 		this.registerDomEvent(document, "paste", (evt) => this.onClipboardPaste(evt), { capture: true });
+		this.registerDomEvent(document, "keydown", (evt) => {
+			if (evt.key === "Escape" && this.filterMenu) {
+				evt.preventDefault();
+				evt.stopPropagation();
+				this.closeFilterMenu();
+			}
+		}, { capture: true });
 		this.registerDomEvent(document, "keyup", (evt) => {
 			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(evt.key)) {
 				// moving the cursor by keyboard is also a new selection, and it
@@ -954,7 +1019,8 @@ export default class PowerTablesPlugin extends Plugin {
 		this.closeToolbar();
 		document.body.removeClass("ptb-striped", "ptb-compact", "ptb-cellrefs", "ptb-headerfill", "ptb-sticky");
 		document.body.style.removeProperty("--ptb-header-fill");
-		document.body.querySelectorAll("tr.ptb-filter").forEach((r) => r.remove());
+		this.closeFilterMenu();
+		document.body.querySelectorAll(".ptb-funnel").forEach((f) => f.remove());
 		document.body.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
 		document.body.querySelectorAll("td[data-ptb], th[data-ptb]").forEach((cell) => {
 			(cell as HTMLElement).style.removeProperty("background-color");
@@ -1009,7 +1075,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.applyColumnWidths();
 		this.applyTableFlags();
 		this.renderCheckboxes();
-		this.renderFilterRows();
+		this.renderFunnels();
 		this.renderGuides();
 		this.renderFillHandle();
 	}
@@ -1023,10 +1089,9 @@ export default class PowerTablesPlugin extends Plugin {
 		return this.settings.cellRefs;
 	}
 
-	/** A table's rows in grid order, header first. The injected filter row is a
-	 *  read-time affordance, not a row of the table, so it never counts. */
+	/** A table's rows in grid order, header first. */
 	private guideRows(tbl: HTMLTableElement): HTMLTableRowElement[] {
-		return Array.from(tbl.rows).filter((tr) => !tr.hasClass("ptb-filter"));
+		return Array.from(tbl.rows);
 	}
 
 	/**
@@ -1473,65 +1538,305 @@ export default class PowerTablesPlugin extends Plugin {
 		document.body.querySelectorAll("table").forEach((tbl) => this.applyFlagClasses(tbl));
 	}
 
-	/* ---------------- filter row (read-time, never touches the file) ---------------- */
+	/* ---------------- AutoFilter (hides rows on screen; only the filter itself is stored) ---------------- */
 
-	private renderFilterRows() {
-		document.body
-			.querySelectorAll(".markdown-rendered table")
-			.forEach((t) => this.renderFilterRow(t as HTMLTableElement));
+	/** Whether this table draws its filter buttons: its own override first, then
+	 *  the global setting. */
+	private filtersOn(tbl: HTMLTableElement): boolean {
+		if (tbl.hasClass("ptb-t-filters")) return true;
+		if (tbl.hasClass("ptb-t-nofilters")) return false;
+		return this.settings.filterRow;
 	}
 
-	/** Inject (or remove) the type-to-filter row under a reading-view table's
-	 *  header. Matching is a case-insensitive substring test per column; rows
-	 *  hide via a class, so the markdown never changes. Existing inputs are kept
-	 *  across rescans so typed filters survive. */
-	private renderFilterRow(table: HTMLTableElement) {
-		const on =
-			table.hasClass("ptb-t-filters") || (this.settings.filterRow && !table.hasClass("ptb-t-nofilters"));
-		const existing = table.querySelector("tr.ptb-filter");
-		const thead = table.tHead;
-		if (!on || !thead || !thead.rows.length) {
-			if (existing) {
-				existing.remove();
-				table.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
+	private renderFunnels() {
+		document.body
+			.querySelectorAll<HTMLTableElement>(":is(.markdown-rendered, .cm-table-widget) table")
+			.forEach((tbl) => {
+				const on = this.filtersOn(tbl);
+				if (!on) {
+					if (tbl.querySelector(".ptb-funnel")) {
+						tbl.querySelectorAll(".ptb-funnel").forEach((f) => f.remove());
+						tbl.querySelectorAll(".ptb-hasfunnel").forEach((c) => (c as HTMLElement).removeClass("ptb-hasfunnel"));
+						tbl.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
+						tbl.removeClass("ptb-filtering");
+					}
+					return;
+				}
+				const head = tbl.rows[0];
+				if (!head) return;
+				Array.from(head.cells).forEach((cell, i) => this.ensureFunnel(cell, i));
+				this.applyFilters(tbl);
+			});
+	}
+
+	/** The funnel in a header cell. Excel puts it at the right-hand end of the
+	 *  header and marks it while that column is filtering, which is the only
+	 *  sign on screen that rows are missing. */
+	private ensureFunnel(cell: HTMLTableCellElement, index: number) {
+		let el = cell.querySelector<HTMLElement>(":scope > .ptb-funnel");
+		if (!el) {
+			el = createDiv({ cls: "ptb-funnel" });
+			setIcon(el, "list-filter");
+			cell.append(el);
+			cell.addClass("ptb-hasfunnel");
+		}
+		if (el.dataset.i !== String(index)) el.dataset.i = String(index);
+		const f = this.filterOf(cell);
+		el.toggleClass("ptb-funnel-on", !!f);
+		const tip = f ? `Filtered: ${filterLabel(f)}. Click to change it.` : "Filter this column";
+		if (el.title !== tip) el.title = tip;
+	}
+
+	/** A column's filter, read off the header cell's own span. The markdown is
+	 *  the source of truth and the rendered span carries the attribute through,
+	 *  so nothing here has to go back to the file to know what is filtering. */
+	private filterOf(cell: HTMLTableCellElement): ColFilter | null {
+		const span = cell.querySelector<HTMLElement>("span.ptb[data-flt]");
+		return parseFilterTag(span?.getAttribute("data-flt") ?? null);
+	}
+
+	/**
+	 * Hide the rows that fail any column's filter.
+	 *
+	 * Both the values offered in the dropdown and the text tested here come off
+	 * the rendered cell, deliberately: a cell holding `[[Note|Alias]]` reads as
+	 * "Alias" on screen and as its own source in the file, and a list built from
+	 * one while matching against the other would offer values that can never
+	 * match. Hidden rows stay in the DOM, so the next pass can bring them back.
+	 */
+	private applyFilters(table: HTMLTableElement) {
+		const head = table.rows[0];
+		if (!head) return;
+		// A header cell under the cursor in Live Preview is a text editor, not
+		// rendered markup, so its filter is momentarily invisible. Re-reading now
+		// would unhide the column's rows for as long as the cursor sits there;
+		// leaving the view alone until the cell renders again is the honest
+		// answer, since nothing has actually changed.
+		if (head.querySelector(".cm-editor")) return;
+		const filters = Array.from(head.cells).map((c) => this.filterOf(c));
+		const rows = Array.from(table.rows).slice(1);
+		for (const row of rows) {
+			let hide = false;
+			for (let c = 0; c < filters.length && !hide; c++) {
+				if (filters[c] && !filterHit(cellText(row.cells[c]), filters[c])) hide = true;
 			}
+			row.toggleClass("ptb-fhidden", hide);
+		}
+		table.toggleClass("ptb-filtering", filters.some(Boolean));
+	}
+
+	/** Open the targeted column's filter from a command or a menu, where there is
+	 *  no funnel to have pressed. */
+	openFilterForTarget() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		const tbl = this.tableElForTarget(t);
+		const head = tbl?.rows[0];
+		const cell = head?.cells[t.col];
+		if (!cell) {
+			new Notice("Power Tables: turn AutoFilter on for this table first (the panel's View menu, or Settings).");
 			return;
 		}
-		const cols = thead.rows[0].cells.length;
-		if (existing && existing.childElementCount === cols) return;
-		existing?.remove();
-		const tr = thead.insertRow();
-		tr.addClass("ptb-filter");
-		for (let i = 0; i < cols; i++) {
-			const td = tr.insertCell();
-			const inp = td.createEl("input", {
-				cls: "ptb-flt",
-				attr: { type: "search", placeholder: "Filter", title: "Type to filter this column (Esc clears)" },
-			});
-			inp.addEventListener("input", () => this.applyFilters(table));
-			inp.addEventListener("click", (e) => e.stopPropagation());
-			inp.addEventListener("keydown", (e) => {
-				if (e.key === "Escape") {
-					inp.value = "";
-					this.applyFilters(table);
-				}
-				e.stopPropagation();
-			});
-		}
+		this.openFilterMenu(cell, t.col);
 	}
 
-	private applyFilters(table: HTMLTableElement) {
-		const needles = Array.from(table.querySelectorAll("tr.ptb-filter input.ptb-flt")).map((i) =>
-			(i as HTMLInputElement).value.trim().toLowerCase()
+	async clearFilters() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		const plan = await this.runPlan(t, (lines) => planClearFilters(lines, t));
+		if (!plan) return;
+		new Notice(
+			plan.cleared
+				? `${plan.cleared} column filter${plan.cleared === 1 ? "" : "s"} cleared.`
+				: "Power Tables: no filters on this table."
 		);
-		table.querySelectorAll("tbody tr").forEach((row) => {
-			const cells = (row as HTMLTableRowElement).cells;
-			let hide = false;
-			for (let c = 0; c < needles.length && !hide; c++) {
-				if (needles[c] && !(cells[c]?.textContent ?? "").toLowerCase().includes(needles[c])) hide = true;
-			}
-			(row as HTMLElement).toggleClass("ptb-fhidden", hide);
+	}
+
+	/** A press on a funnel opens that column's filter and never reaches the cell
+	 *  underneath, which would otherwise start editing the header. */
+	private onFunnelDown(evt: PointerEvent) {
+		if (!(evt.target instanceof Element)) return;
+		const el = evt.target.closest<HTMLElement>(".ptb-funnel");
+		if (!el) return;
+		evt.preventDefault();
+		evt.stopPropagation();
+		const cell = el.closest<HTMLTableCellElement>("th, td");
+		if (cell) this.openFilterMenu(cell, Number(el.dataset.i ?? 0));
+	}
+
+	closeFilterMenu() {
+		this.filterMenu?.remove();
+		this.filterMenu = null;
+	}
+
+	/**
+	 * Excel's AutoFilter dropdown: sort, then either tick the values to keep or
+	 * give the column a condition.
+	 *
+	 * It commits on OK rather than on every tick, because a filter is stored in
+	 * the note and a write per checkbox would be a write per checkbox. That is
+	 * also what Excel does, so the shape is already familiar.
+	 */
+	openFilterMenu(cell: HTMLTableCellElement, index: number) {
+		this.closeFilterMenu();
+		const table = cell.closest<HTMLTableElement>("table");
+		if (!table) return;
+		const current = this.filterOf(cell);
+		const root = document.body.createDiv({ cls: "ptb-fdrop" });
+		this.filterMenu = root;
+
+		const sorts = root.createDiv({ cls: "ptb-fsorts" });
+		const sortBtn = (label: string, icon: string, dir: "asc" | "desc") => {
+			const b = sorts.createEl("button", { cls: "ptb-fbtn" });
+			setIcon(b.createSpan({ cls: "ptb-fbtn-icon" }), icon);
+			b.createSpan({ text: label });
+			b.addEventListener("click", () => {
+				this.closeFilterMenu();
+				void this.withCell(cell, () => this.sortTable(dir));
+			});
+		};
+		sortBtn("Sort A→Z", "arrow-down-a-z", "asc");
+		sortBtn("Sort Z→A", "arrow-up-a-z", "desc");
+
+		// Every distinct value in the column, with how many rows hold it, taken
+		// from the rendered cells so the list says what the screen says.
+		const counts = new Map<string, number>();
+		for (const row of Array.from(table.rows).slice(1)) {
+			const v = fltSafe(cellText(row.cells[index]));
+			counts.set(v, (counts.get(v) ?? 0) + 1);
+		}
+
+		const ops: [FilterOp | "values", string][] = [
+			["values", "Filter by value"],
+			["contains", "Contains"],
+			["starts", "Begins with"],
+			["ends", "Ends with"],
+			["eq", "Equals"],
+			["gt", "Greater than"],
+			["lt", "Less than"],
+			["between", "Between (10 ~ 20)"],
+			["empty", "Is empty"],
+			["notempty", "Is not empty"],
+		];
+		const sel = root.createEl("select", { cls: "ptb-fop" });
+		for (const [value, label] of ops) sel.createEl("option", { value, text: label });
+		sel.value = !current || current.op === "in" || current.op === "ex" ? "values" : current.op;
+
+		const cond = root.createDiv({ cls: "ptb-fcond" });
+		const val = cond.createEl("input", { cls: "ptb-fval", attr: { type: "text", placeholder: "Value" } });
+		if (current && current.op !== "in" && current.op !== "ex") val.value = current.value;
+
+		const listWrap = root.createDiv({ cls: "ptb-flistwrap" });
+		const search = listWrap.createEl("input", {
+			cls: "ptb-fsearch",
+			attr: { type: "search", placeholder: "Search values" },
 		});
+		const list = listWrap.createDiv({ cls: "ptb-flist" });
+
+		// Ticked means visible. A stored filter decides the starting state; with
+		// none stored everything is ticked, which is what "no filter" means.
+		const ticked = new Set<string>();
+		for (const v of counts.keys()) {
+			const shown = !current || current.op === "in" || current.op === "ex" ? filterHit(v, current) : true;
+			if (shown) ticked.add(v);
+		}
+		const boxes = new Map<string, HTMLInputElement>();
+		const allBox = list.createEl("label", { cls: "ptb-fitem ptb-fall" });
+		const allInput = allBox.createEl("input", { attr: { type: "checkbox" } });
+		allBox.createSpan({ text: "(Select all)" });
+		// Select-all follows the search: it ticks what you can see, which is the
+		// only reading that makes it useful on a column of hundreds.
+		const syncAll = () => {
+			const visible = [...boxes].filter(([, b]) => !b.parentElement?.hasClass("ptb-fgone"));
+			const on = visible.filter(([v]) => ticked.has(v)).length;
+			allInput.checked = on === visible.length && !!visible.length;
+			allInput.indeterminate = on > 0 && on < visible.length;
+		};
+		for (const [value, count] of counts) {
+			const row = list.createEl("label", { cls: "ptb-fitem" });
+			const box = row.createEl("input", { attr: { type: "checkbox" } });
+			box.checked = ticked.has(value);
+			row.createSpan({ cls: "ptb-fitem-t", text: value || "(blank)" });
+			row.createSpan({ cls: "ptb-fitem-n", text: String(count) });
+			box.addEventListener("change", () => {
+				if (box.checked) ticked.add(value);
+				else ticked.delete(value);
+				syncAll();
+			});
+			boxes.set(value, box);
+		}
+		allInput.addEventListener("change", () => {
+			for (const [v, b] of boxes) {
+				if (b.parentElement?.hasClass("ptb-fgone")) continue;
+				b.checked = allInput.checked;
+				if (allInput.checked) ticked.add(v);
+				else ticked.delete(v);
+			}
+			syncAll();
+		});
+		// The search narrows the list rather than the table: it is how you find a
+		// value to tick when the column holds hundreds.
+		search.addEventListener("input", () => {
+			const n = search.value.trim().toLowerCase();
+			for (const [v, b] of boxes) {
+				b.parentElement?.toggleClass("ptb-fgone", !!n && !v.toLowerCase().includes(n));
+			}
+			syncAll();
+		});
+		syncAll();
+
+		const showValues = () => {
+			const values = sel.value === "values";
+			listWrap.toggleClass("ptb-fhide", !values);
+			cond.toggleClass("ptb-fhide", values);
+			val.toggleClass("ptb-fhide", sel.value === "empty" || sel.value === "notempty");
+		};
+		sel.addEventListener("change", showValues);
+		showValues();
+
+		const commit = (filter: ColFilter | null) => {
+			this.closeFilterMenu();
+			const apply = (tgt: ClickTarget) =>
+				void this.runPlan({ ...tgt, editor: this.editorForPath(tgt.path), fromCursor: false }, (lines) =>
+					planSetColumnFilter(lines, tgt, filter)
+				);
+			const tgt = this.targetFromCell(cell);
+			if (tgt) apply({ ...tgt, col: index });
+			else void this.fallbackTargetFromCell(cell).then((fb) => fb && apply({ ...fb, col: index }));
+		};
+
+		const foot = root.createDiv({ cls: "ptb-ffoot" });
+		const clear = foot.createEl("button", { cls: "ptb-fbtn", text: "Clear" });
+		clear.addEventListener("click", () => commit(null));
+		const cancel = foot.createEl("button", { cls: "ptb-fbtn", text: "Cancel" });
+		cancel.addEventListener("click", () => this.closeFilterMenu());
+		const ok = foot.createEl("button", { cls: "ptb-fbtn mod-cta", text: "OK" });
+		ok.addEventListener("click", () => {
+			if (sel.value !== "values") {
+				const op = sel.value as FilterOp;
+				const v = op === "empty" || op === "notempty" ? "" : val.value.trim();
+				commit(op !== "empty" && op !== "notempty" && !v ? null : { op, value: v });
+				return;
+			}
+			// Store whichever side of the tick list is shorter. Which side that is
+			// also decides what a value arriving later does, and the shorter side
+			// is the one that describes what was meant: untick two of forty and
+			// new arrivals should show, tick one of forty and they should not.
+			const all = [...counts.keys()];
+			const out = all.filter((v) => !ticked.has(v));
+			if (!out.length) commit(null);
+			else if (ticked.size <= out.length) commit({ op: "in", value: [...ticked].map(fltValue).join("~") });
+			else commit({ op: "ex", value: out.map(fltValue).join("~") });
+		});
+
+		// anchored under the funnel, then pulled back inside the window
+		const r = cell.getBoundingClientRect();
+		const box = root.getBoundingClientRect();
+		const left = Math.max(6, Math.min(r.right - box.width, window.innerWidth - box.width - 6));
+		const top = r.bottom + 4 + box.height > window.innerHeight ? Math.max(6, r.top - box.height - 4) : r.bottom + 4;
+		root.style.left = `${left}px`;
+		root.style.top = `${top}px`;
+		search.focus();
 	}
 
 	/** Copy a span's background onto its <td>/<th> so the whole cell fills, like a
@@ -1621,12 +1926,12 @@ export default class PowerTablesPlugin extends Plugin {
 
 	/* ---------------- targeting ---------------- */
 
-	/** rowIndex with the injected filter row factored out; null for cells inside
-	 *  that row itself, which map to no markdown line. */
+	/** Which row of the table this is. Every rendered row maps to a markdown
+	 *  line now that filtering injects nothing; a row hidden by a filter is
+	 *  still one of them, which is what keeps the guides numbering the file
+	 *  rather than the screen. */
 	private realRowIndex(tr: HTMLTableRowElement): number | null {
-		if (tr.hasClass("ptb-filter")) return null;
-		const flt = tr.closest<HTMLTableElement>("table")?.querySelector("tr.ptb-filter") as HTMLTableRowElement | null;
-		return flt && flt.rowIndex < tr.rowIndex ? tr.rowIndex - 1 : tr.rowIndex;
+		return tr.rowIndex;
 	}
 
 	private targetFromCell(cell: HTMLTableCellElement): ClickTarget | null {
@@ -2355,6 +2660,9 @@ export default class PowerTablesPlugin extends Plugin {
 		// phones never apply widths, so dragging one out would just snap back
 		if (Platform.isPhone) return null;
 		if (!(evt.target instanceof Element)) return null;
+		// the funnel sits in the band the resize edge would claim, and it is the
+		// smaller target of the two, so it wins the pixels it covers
+		if (evt.target.closest(".ptb-funnel")) return null;
 		const cell = evt.target.closest<HTMLTableCellElement>("th, td");
 		if (!cell) return null;
 		const tr = cell.closest<HTMLTableRowElement>("tr");
@@ -2445,10 +2753,9 @@ export default class PowerTablesPlugin extends Plugin {
 	 *  and are skipped. */
 	private tableElForTarget(t: { path: string; line: number }): HTMLTableElement | null {
 		// a table whose markdown starts at `start` spans start..start+rows lines
-		// (header + delimiter + body); the injected filter row isn't in the file
+		// (header + delimiter + body)
 		const contains = (tbl: HTMLTableElement, start: number) => {
-			let rows = tbl.querySelectorAll("tr").length;
-			if (tbl.querySelector("tr.ptb-filter")) rows--;
+			const rows = tbl.querySelectorAll("tr").length;
 			return t.line >= start && t.line <= start + rows;
 		};
 		let found: HTMLTableElement | null = null;
@@ -3427,6 +3734,8 @@ export default class PowerTablesPlugin extends Plugin {
 		const items: [string, string, (e: MouseEvent) => void][] = [
 			["Fill down", "arrow-down-to-line", () => void this.fill("down")],
 			["Fill right", "arrow-right-to-line", () => void this.fill("right")],
+			["Filter column…", "list-filter", () => this.openFilterForTarget()],
+			["Clear filters", "filter-x", () => void this.clearFilters()],
 			["Copy cells", "copy", () => void this.copyCells()],
 			["Cut cells", "scissors", () => void this.copyCells(true)],
 			["Paste cells", "clipboard-paste", () => void this.pasteCells()],
@@ -3473,7 +3782,7 @@ export default class PowerTablesPlugin extends Plugin {
 			["compact", "Compact rows"],
 			["headerfill", "Header fill"],
 			["sticky", "Sticky header"],
-			["filters", "Filter row"],
+			["filters", "AutoFilter"],
 		];
 		const menu = new Menu();
 		menu.addItem((i) => i.setTitle("This table").setIsLabel(true));
@@ -4579,7 +4888,7 @@ class PanelUI {
 		tflag("compact", "Compact", "Reduce cell padding on this table (overrides the global setting)");
 		tflag("headerfill", "Header", "Fill this table's header row (overrides the global setting)");
 		tflag("sticky", "Sticky", "Keep this table's header row pinned while scrolling (overrides the global setting)");
-		tflag("filters", "Filter", "Type-to-filter row under this table's header in Reading view (overrides the global setting)");
+		tflag("filters", "Filter", "Filter buttons on this table's column headers (overrides the global setting)");
 
 		root.createDiv({
 			cls: "ptb-hint",
@@ -6030,9 +6339,9 @@ class PowerTablesSettingTab extends PluginSettingTab {
 			},
 		});
 		appearance.push({
-			name: "Filter row",
-			desc: "A type-to-filter box under each column header in Reading view. Filtering only hides rows on screen; the note never changes. The panel's This-table buttons override it per table.",
-			help: "Adds a search box under each column header in Reading view. Rows that do not match every typed filter are hidden on screen, and Esc clears a box. The note itself is never modified.",
+			name: "AutoFilter",
+			desc: "A filter button on every column header, in both Reading view and Live Preview. Filtering hides rows on screen; the only thing written to the note is the filter itself, on the header cell. The panel's This-table buttons override it per table.",
+			help: "Puts Excel's filter button on each column header. The dropdown sorts the column, ticks the values to keep, or takes a condition (contains, begins with, greater than, between, is empty). Rows failing any column's filter are hidden on screen; no row is ever rewritten. The filter is stored on the header cell, so it survives reopening the note, sorts, and column moves, and it clears from the funnel or from Clear all filters.",
 			build: (s) => {
 				s.addToggle((t) =>
 					t.setValue(this.plugin.settings.filterRow).onChange(async (v) => {
