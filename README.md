@@ -13,7 +13,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 
 ## Features at a glance
 
-- Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column; color scales and data bars
+- Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column; color scales, data bars and icon sets
 - Live totals and Excel-style formulas: 42 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
@@ -233,6 +233,16 @@ The **data bar** condition in the same dialog draws a bar behind every numeric c
 **Nothing is written to the note.** This is the one conditional format that is drawn rather than stored, and deliberately: a color survives the plugin being uninstalled and is worth writing into the cell for that, but a bar cannot survive it at all, so storing one would buy nothing and would rewrite every cell of the column each time any value in it changed. The rule itself still lives on the header cell like every other, so it travels with the file.
 
 Because it is measured at render time it keeps up with everything: edit a value and the column re-scales, and **filter the table and the bars re-scale to the rows that are left** rather than to rows nobody can see. A cell with nothing numeric in it gets no bar, and a cell that carries a fill of its own keeps it, behind the bar. Bars sit alongside the other rules on a column: the bar never counts as a match, so the conditions under it still run.
+
+### Icon sets
+
+The **icon set** condition marks every numeric cell by which third of the column's range its value sits in. Three sets: **▲ ▬ ▼ arrows**, **traffic lights**, and **✓ ! ✗ symbols**, green through amber to red.
+
+**The bands are thirds of the column's own range**, which is Excel's rule and is deliberately different from a data bar. A bar is a quantity and needs a zero to be read against; an icon is a rank, and ranking against zero would put every icon in the top band the moment a column held no small values. So a column of 10, 20, 30 gets one of each, where the same column's bars are a third, two thirds and full.
+
+Everything else matches the bars: drawn rather than stored, re-scaled as values change and as a filter hides rows, no icon on a cell with nothing numeric in it, and never counted as a match so the conditions under it still run. A column can carry both, and a bar with an icon in front of it is a readable way to show a number and its standing at once.
+
+The glyph is CSS generated content rather than anything in the cell, so it stays out of what the filters, the bars and the dropdown's value list read, and out of the note entirely.
 
 ### Format painter
 
