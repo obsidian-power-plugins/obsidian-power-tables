@@ -1350,7 +1350,14 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 		const editor = this.editorForPath(file);
 		if (!editor || Number.isNaN(start)) return null;
-		return { path: file, editor, targets: blockTargets(start, b) };
+		// same note as readWidgetSelection: which of these the screen is not
+		// showing, taken while the grid rows are still in hand
+		const rows = this.guideRows(table);
+		const hiddenLines = new Set<number>();
+		for (let r = Math.min(b.r1, b.r2); r <= Math.max(b.r1, b.r2); r++) {
+			if (rows[r]?.hasClass("ptb-fhidden")) hiddenLines.add(start + (r === 0 ? 0 : r + 1));
+		}
+		return { path: file, editor, targets: blockTargets(start, b), hiddenLines };
 	}
 
 	/** Shade a block the plugin selected itself. Obsidian paints its own
@@ -2562,12 +2569,19 @@ export default class PowerTablesPlugin extends Plugin {
 	 * $ then Auto has to keep meaning the column. The remembered selection is
 	 * cleared by the gestures that genuinely start a new one, never by our own
 	 * edits, which is the distinction the live read cannot make.
+	 *
+	 * Rows an AutoFilter is hiding are dropped on the way out. Everything that
+	 * acts on a selection comes through here, and a selection can easily cover
+	 * rows the screen is not showing: pressing a column's guide letter takes the
+	 * whole column, and the keyboard can extend across a hidden row. Clearing,
+	 * coloring, formatting or totalling those would reach past what anyone can
+	 * see. Excel acts on the visible cells of a filtered range and so does this.
 	 */
 	widgetSelection(): { path: string; editor: Editor; targets: { line: number; col: number; expect: null }[] } | null {
 		const live = this.readWidgetSelection();
 		if (live) {
 			this.stickySel = live;
-			return live;
+			return this.visibleOnly(live);
 		}
 		const s = this.stickySel;
 		if (!s) return null;
@@ -2584,7 +2598,17 @@ export default class PowerTablesPlugin extends Plugin {
 			this.stickySel = null;
 			return null;
 		}
-		return { ...s, editor: ed };
+		return this.visibleOnly({ ...s, editor: ed });
+	}
+
+	/** The same selection with the hidden rows taken out. A selection that is
+	 *  entirely hidden is no selection: there is nothing on screen to act on. */
+	private visibleOnly<T extends { targets: { line: number; col: number; expect: null }[]; hiddenLines: Set<number> }>(
+		sel: T
+	): T | null {
+		if (!sel.hiddenLines.size) return sel;
+		const targets = sel.targets.filter((t) => !sel.hiddenLines.has(t.line));
+		return targets.length ? { ...sel, targets } : null;
 	}
 
 	/** Forget the remembered selection: a new gesture is starting one. */
@@ -2612,7 +2636,12 @@ export default class PowerTablesPlugin extends Plugin {
 		return !!parseRow(view.editor.getLine(cur.line) ?? "");
 	}
 
-	private readWidgetSelection(): { path: string; editor: Editor; targets: { line: number; col: number; expect: null }[] } | null {
+	private readWidgetSelection(): {
+		path: string;
+		editor: Editor;
+		targets: { line: number; col: number; expect: null }[];
+		hiddenLines: Set<number>;
+	} | null {
 		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const recent = this.app.workspace.getMostRecentLeaf();
 		const view = active ?? (recent?.view instanceof MarkdownView ? recent.view : null);
@@ -2624,13 +2653,20 @@ export default class PowerTablesPlugin extends Plugin {
 		const sel = table?.selectedCells;
 		if (!table || !Array.isArray(sel) || sel.length < 2) return null;
 		const targets: { line: number; col: number; expect: null }[] = [];
+		// Which of these the screen is not showing, noted here because the grid
+		// row is in hand and the DOM row is one lookup away; working it back out
+		// from a document line later would cost a file read.
+		const rowsEl = table.tableEl instanceof HTMLTableElement ? table.tableEl.rows : null;
+		const hiddenLines = new Set<number>();
 		for (const c of sel) {
 			const rc = c as { row?: number; col?: number };
 			if (typeof rc.row !== "number" || typeof rc.col !== "number") continue;
 			const t = this.widgetCellLine(em, table, rc.row, rc.col, view);
-			if (t) targets.push({ ...t, expect: null });
+			if (!t) continue;
+			targets.push({ ...t, expect: null });
+			if (rowsEl?.[rc.row]?.hasClass("ptb-fhidden")) hiddenLines.add(t.line);
 		}
-		return targets.length >= 2 ? { path: view.file.path, editor: view.editor, targets } : null;
+		return targets.length >= 2 ? { path: view.file.path, editor: view.editor, targets, hiddenLines } : null;
 	}
 
 	/** Route a cell action: an explicit modifier wins, then the table editor's
