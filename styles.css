@@ -666,6 +666,20 @@ tr.ptb-fhidden {
 	background-color: var(--background-modifier-hover);
 }
 
+/* ---------- data bars ----------
+   background-image rather than background-color, so a cell that also carries a
+   fill of its own still shows it behind the bar rather than losing it. The bar
+   is drawn from the inline --ptb-bar the render pass sets; without the plugin
+   there is no variable, no class and no bar, and the number is simply a number. */
+.ptb-bar {
+	background-image: linear-gradient(
+		to right,
+		var(--ptb-bar-color) 0 var(--ptb-bar),
+		transparent var(--ptb-bar)
+	);
+	background-repeat: no-repeat;
+}
+
 /* ---------- data validation: the picker chevron ----------
    The cell keeps its own content, colors and number format; the chevron sits
    beside it. Marked with a class rather than matched with :has(), for the
