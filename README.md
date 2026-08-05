@@ -14,7 +14,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 ## Features at a glance
 
 - Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column; color scales, data bars and icon sets
-- Live totals and Excel-style formulas: 48 functions including `XLOOKUP`, `SUMIFS`/`COUNTIFS`, `INDEX`/`MATCH`, `IFS`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
+- Live totals and Excel-style formulas: 49 functions including `XLOOKUP`, `SUMIFS`/`COUNTIFS`, `INDEX`/`MATCH`, `IFS`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
 - Copy, cut and paste a block of cells with Ctrl+C/X/V, formulas and formatting included, plus paste special: values, formulas, formats, transpose
@@ -26,6 +26,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
 - Data validation: give a column its list of values and every cell gets a picker, so a status column is a click
+- Sparklines: `=SPARKLINE(B2:G2)` draws a row as block characters, stored as text so it survives anywhere the note goes
 - Cleanup commands: remove duplicate rows, text to columns, transpose, and find and replace within one table
 - Summarize: group by one column, aggregate another, and get the answer as a plain Markdown table everything else still works on
 - Excel's AutoFilter: a funnel on every column header, ticking values or taking a condition, stored in the note so a filtered view is still there tomorrow
@@ -207,6 +208,7 @@ Cells can hold Excel-style formulas. Type `=SUM(B2:B4)` (or `=C2*1.08`, `=AVG(B2
 | | |
 |---|---|
 | Math and stats | `SUM` `AVG`/`AVERAGE` `MIN` `MAX` `MEDIAN` `PRODUCT` `SUMPRODUCT` `STDEV` `POWER` `SQRT` `INT` `MOD` `ABS` `ROUND` `ROUNDUP` `ROUNDDOWN` |
+| Sparklines | `SPARKLINE(B2:G2)` for a row of block characters, `SPARKLINE(B2:G2, "win")` for wins and losses |
 | Filtered totals | `SUBTOTAL(9, B2:B20)`, and the other function codes, which skip what an [AutoFilter](#autofilter) is hiding |
 | Counting | `COUNT` `COUNTA` `COUNTBLANK` |
 | Conditional | `IF` `IFS` `SWITCH` `IFERROR` `AND` `OR` `NOT` `SUMIF` `COUNTIF` `AVERAGEIF` |
@@ -276,6 +278,26 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 - **Numbers and currency sort numerically** (`$1,644.00` > `$79.00`), dates like `1/15/2026` or `2026-01-15` sort chronologically, everything else sorts alphabetically; blank cells always land at the bottom.
 - Rows move as whole lines, so **colors and live calcs travel with their rows**, and any row containing a live calc (your Total row) stays **pinned to the bottom**.
 - The same menu has **Move row up/down** and **Move column left/right**; column moves carry the alignment row along.
+
+### Sparklines
+
+`=SPARKLINE(B2:G2)` draws the row it points at as one short string of block characters, and recalculates with everything else when the numbers change.
+
+```markdown
+| Rep | Jan | Feb | Mar | Apr | May | Jun | Trend  | W/L    |
+| --- | --- | --- | --- | --- | --- | --- | ------ | ------ |
+| Ann | 12  | 19  | 15  | 22  | 30  | 28  | ▁▄▂▅█▇ | ▀▀▀▀▀▀ |
+| Bob | 40  | 31  | 33  | 20  | 18  | 9   | █▆▆▃▃▁ | ▀▀▀▀▀▀ |
+| Cid | 5   | -3  | 8   | -1  | 4   | 6   | ▆▁█▂▅▇ | ▀▄▀▄▀▀ |
+```
+
+A second argument of `"win"` draws wins and losses instead: which side of zero each value fell on, which is the one question a bar height cannot answer.
+
+**It is text, not a drawing, and that is the point.** A sparkline is a formula's output, which makes it content rather than formatting: it lives in the cell, it survives the plugin being uninstalled, and it shows up on a phone, on GitHub, and in any Markdown reader. Eight levels is the resolution that buys, which is enough to read a shape and not enough to read a value, which is what a sparkline is for.
+
+**The scale runs from the row's own smallest value to its largest**, not from zero. That is the opposite of a [data bar](#data-bars) and for the opposite reason: a bar sits beside its number and answers "how much", while a sparkline stands in for the numbers and answers "what shape". Measured from zero, a year of temperatures would be twelve identical full bars.
+
+A row where every value is the same draws flat and in the middle. Cells with nothing numeric in them are skipped rather than drawn as gaps, so a half-filled year of months reads as the months so far.
 
 ### Cleaning up a table
 
