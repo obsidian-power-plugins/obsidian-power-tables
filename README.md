@@ -26,6 +26,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
 - Data validation: give a column its list of values and every cell gets a picker, so a status column is a click
+- Summarize: group by one column, aggregate another, and get the answer as a plain Markdown table everything else still works on
 - Excel's AutoFilter: a funnel on every column header, ticking values or taking a condition, stored in the note so a filtered view is still there tomorrow
 - CSV/Excel import and export, table prettifier, Excel-style cell reference guides that select the column or row they label
 - Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
@@ -275,11 +276,29 @@ The **Sort** button sorts the table's body rows by the targeted column, ascendin
 - Rows move as whole lines, so **colors and live calcs travel with their rows**, and any row containing a live calc (your Total row) stays **pinned to the bottom**.
 - The same menu has **Move row up/down** and **Move column left/right**; column moves carry the alignment row along.
 
+### Summarize (a pivot whose output is a table)
+
+**Summarize…** (the panel's Data section, the table menu, or the command palette) groups the rows by one column and aggregates another, writing the answer as a new table below the source. Pick the two columns by their own header names and one of Sum, Count, Average, Min or Max.
+
+```markdown
+| Region | Sum of Amount |
+| --- | ---: |
+| West | $300.00 |
+| East | $475.00 |
+| **Total** | $775.00 |
+```
+
+- **The result is an ordinary Markdown table**, and nothing marks it as generated. That is the point: filters, data bars, number formats, sorting and everything else work on it the moment it lands, and there is no stale link to a source table that has since been edited. The cost is that it is a snapshot, so run it again for fresh numbers and delete the old one.
+- **Groups come out in the order they first appear**, not sorted. This is the one place it is not Excel: a table is usually already in an order somebody meant, months or stages or priority, and sorting alphabetically would throw that away. Sort it afterwards if that was not the order you wanted.
+- **A column of dollars summarises to dollars**, keeping the currency symbol and the decimal places the column was written with. Count is always a bare integer, because it counts rows.
+- **The grand total is computed over the rows**, not from the group answers. For Sum those are the same number; for Average they are not, since the mean of a set of means is only the mean when the groups are the same size.
+- Rows with nothing in the grouping column collect under **(blank)**.
+
 ### Import & export (Excel / CSV)
 
 **Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
 
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*, *Data validation (column list)…*.
+Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*, *Data validation (column list)…*, *Summarize table…*.
 
 ### On mobile
 
