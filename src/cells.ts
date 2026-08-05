@@ -2191,7 +2191,7 @@ const FN_NAMES =
 	// Longest first where one name starts another: this alternation is tried in
 	// order, so SUMIF ahead of SUMIFS would match the first six letters and
 	// leave a stray S behind. Same for COUNTIFS, AVERAGEIFS and IFS.
-	"SUBTOTAL|SUMPRODUCT|SUMIFS|SUMIF|SUM|COUNTBLANK|COUNTIFS|COUNTIF|COUNTA|COUNT|AVERAGEIFS|AVERAGEIF|AVERAGE|AVG|" +
+	"SPARKLINE|SUBTOTAL|SUMPRODUCT|SUMIFS|SUMIF|SUM|COUNTBLANK|COUNTIFS|COUNTIF|COUNTA|COUNT|AVERAGEIFS|AVERAGEIF|AVERAGE|AVG|" +
 	"MEDIAN|PRODUCT|POWER|SQRT|STDEV|INT|MOD|" +
 	"ROUNDUP|ROUNDDOWN|ROUND|MIN|MAX|IFERROR|IFS|IF|AND|OR|NOT|ABS|LEN|LEFT|RIGHT|MID|TRIM|UPPER|LOWER|CONCAT|SWITCH|" +
 	"XLOOKUP|VLOOKUP|MATCH|INDEX|YEAR|MONTH|DAY";
@@ -3123,6 +3123,16 @@ export function evalFormula(
 				}
 				return s;
 			}
+			case "SPARKLINE": {
+				const rng = args[0];
+				if (!rng || !("cells" in rng)) throw new Error(ERR_VALUE);
+				guardSelf(rng.box);
+				const style = args[1] && !("cells" in args[1]) ? String(args[1].v).toLowerCase() : "bars";
+				return sparkline(
+					rng.cells.map(({ r, c }) => numAt(r, c)),
+					style === "win" ? "win" : "bars"
+				);
+			}
 			case "XLOOKUP": {
 				// What VLOOKUP cannot do: the column you want back does not have
 				// to sit to the right of the one you search, because the two are
@@ -3471,6 +3481,49 @@ export type IconSet = (typeof ICON_SETS)[number];
  * A column whose values are all the same is all top band, which is the same
  * answer barPercents gives that column when it makes every bar full.
  */
+/* ---------------- sparklines ---------------- */
+
+/** The eight heights a bar sparkline is drawn from, lowest first. */
+export const SPARK_BARS = "▁▂▃▄▅▆▇█";
+export type SparkStyle = "bars" | "win";
+
+/**
+ * A row of numbers as one short string of block characters.
+ *
+ * Text rather than a drawing, and that is the whole design. A sparkline is a
+ * formula's output, which is content rather than presentation: it belongs in
+ * the cell, it has to survive the plugin being uninstalled, and it should show
+ * up on a phone, on GitHub, and in any Markdown reader. An SVG would be
+ * prettier and could do none of that. Eight levels is the resolution this buys,
+ * which is enough to read a shape and not enough to read a value, which is
+ * what a sparkline is for.
+ *
+ * The scale runs from the row's own smallest value to its largest, not from
+ * zero. That is the opposite of a data bar, and deliberately: a bar sits beside
+ * its number and answers "how much", while a sparkline stands in for a row of
+ * numbers and answers "what shape". Measured from zero, a year of temperatures
+ * would be eight identical full bars.
+ *
+ * Cells with nothing numeric in them are skipped rather than drawn as gaps,
+ * which is what makes a half-filled year of months read as the months so far.
+ */
+export function sparkline(values: (number | null)[], style: SparkStyle = "bars"): string {
+	const nums = values.filter((v): v is number => v != null);
+	if (!nums.length) return "";
+	if (style === "win") {
+		// win/loss says only which side of zero each value fell, which is the
+		// one question a bar height cannot answer
+		return nums.map((v) => (v > 0 ? "▀" : v < 0 ? "▄" : "─")).join("");
+	}
+	const min = Math.min(...nums);
+	const max = Math.max(...nums);
+	const span = max - min;
+	const top = SPARK_BARS.length - 1;
+	// a flat row draws flat, in the middle, rather than all empty or all full
+	if (span === 0) return SPARK_BARS[Math.floor(top / 2)].repeat(nums.length);
+	return nums.map((v) => SPARK_BARS[Math.round(((v - min) / span) * top)]).join("");
+}
+
 export function iconBands(values: (number | null)[], bands = 3): (number | null)[] {
 	const n = Math.max(2, Math.min(5, Math.round(bands)));
 	const nums = values.filter((v): v is number => v != null);

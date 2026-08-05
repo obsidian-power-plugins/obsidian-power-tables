@@ -101,6 +101,7 @@ import {
 	planFindReplace,
 	SummaryFn,
 	iconBands,
+	sparkline,
 	listTag,
 	listValues,
 	listSafe,
@@ -1449,6 +1450,28 @@ eq(bars([null, null]), "-,-", "and a column with none gets none at all");
 eq(bars([]), "", "an empty column is not an error");
 ok(!ruleHit("50", "bar", "#4A90D9"), "a bar never counts as a match, or it would stop the rules under it running");
 
+// --- sparklines ---
+eq(sparkline([1, 2, 3, 4, 5, 6, 7, 8]), "▁▂▃▄▅▆▇█", "eight rising values use all eight heights");
+eq(sparkline([1, 8]), "▁█", "the scale runs from the row's own smallest to its largest");
+eq(sparkline([101, 108]), "▁█", "which is why a row that never comes near zero still shows its shape");
+eq(sparkline([5, 5, 5]), "▄▄▄", "a flat row draws flat and in the middle, not empty and not full");
+eq(sparkline([1, null, 3]), "▁█", "a cell with nothing numeric in it is skipped, not drawn as a gap");
+eq(sparkline([]), "", "and a row with no numbers at all draws nothing");
+eq(sparkline([null, null]), "", "even when it has cells");
+eq(sparkline([-5, 0, 5]), "▁▅█", "negatives are just the low end of the row's range");
+eq(sparkline([3, -2, 0, 7], "win"), "▀▄─▀", "win/loss says only which side of zero each value fell on");
+eq(sparkline([1, 2, 3], "win"), "▀▀▀", "so a row that never goes negative is all wins");
+
+const SPK = [["1", "5", "3", "9"]];
+eq(evalFormula("=SPARKLINE(A1:D1)", SPK, 5, 5), "▁▅▃█", "SPARKLINE reads a range and returns the string");
+eq(evalFormula("=SPARKLINE(A1:D1,'win')", SPK, 5, 5), "▀▀▀▀", "and takes the style as a second argument");
+eq(errOf(() => evalFormula("=SPARKLINE(3)", SPK, 5, 5)), "#VALUE!", "something that is not a range is an argument error");
+// it is an ordinary formula, so it settles into the note and recomputes
+const SPKT = ["| Name | Q1 | Q2 | Q3 | Trend |", "| - | - | - | - | - |", "| a | 1 | 5 | 3 | =SPARKLINE(B2:D2) |"];
+const spkSettled = settle(SPKT);
+ok(spkSettled[2].includes("▁█▅"), "a sparkline in a cell settles to its characters like any other formula");
+ok(spkSettled[2].includes("data-f"), "keeping the formula, so it redraws when the numbers change");
+
 // --- icon sets ---
 const icons = (v: (number | null)[], n = 3) => iconBands(v, n).map((x) => (x === null ? "-" : x)).join(",");
 eq(icons([0, 50, 100]), "2,1,0", "three icons cut the column's range into thirds, band 0 being the top");
@@ -1709,7 +1732,7 @@ ok(looksLikeFormula("=VLOOKUP('a',A1:B2,2)") && looksLikeFormula("=LEN(A2)"), "t
 ok(!looksLikeFormula("=hello world"), "plain text still is not a formula");
 
 // --- the autocomplete list and the parser cannot drift apart ---
-ok(FORMULA_FUNCTIONS.length === 49, "every registered function name is offered for completion");
+ok(FORMULA_FUNCTIONS.length === 50, "every registered function name is offered for completion");
 ok(
 	FORMULA_FUNCTIONS.every((f, i) => i === 0 || FORMULA_FUNCTIONS[i - 1] <= f),
 	"the suggestion list is alphabetical"
