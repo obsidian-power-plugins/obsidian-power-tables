@@ -680,6 +680,62 @@ tr.ptb-fhidden {
 	background-repeat: no-repeat;
 }
 
+/* ---------- icon sets ----------
+   Generated content rather than an injected element, deliberately: a span in
+   the cell would land in its textContent, and textContent is what the filters,
+   the data bars and the dropdown's value list all read. A ::before is invisible
+   to all of them, and to anyone opening the note without the plugin. */
+[data-ptb-icon]::before {
+	margin-right: 5px;
+	font-size: 0.85em;
+	line-height: 1;
+}
+
+[data-ptb-icon="arrows-0"]::before {
+	content: "▲";
+	color: var(--color-green);
+}
+
+[data-ptb-icon="arrows-1"]::before {
+	content: "▬";
+	color: var(--color-yellow);
+}
+
+[data-ptb-icon="arrows-2"]::before {
+	content: "▼";
+	color: var(--color-red);
+}
+
+[data-ptb-icon="traffic-0"]::before {
+	content: "●";
+	color: var(--color-green);
+}
+
+[data-ptb-icon="traffic-1"]::before {
+	content: "●";
+	color: var(--color-yellow);
+}
+
+[data-ptb-icon="traffic-2"]::before {
+	content: "●";
+	color: var(--color-red);
+}
+
+[data-ptb-icon="symbols-0"]::before {
+	content: "✓";
+	color: var(--color-green);
+}
+
+[data-ptb-icon="symbols-1"]::before {
+	content: "!";
+	color: var(--color-yellow);
+}
+
+[data-ptb-icon="symbols-2"]::before {
+	content: "✗";
+	color: var(--color-red);
+}
+
 /* ---------- data validation: the picker chevron ----------
    The cell keeps its own content, colors and number format; the chevron sits
    beside it. Marked with a class rather than matched with :has(), for the
