@@ -691,12 +691,16 @@ tr.ptb-fhidden {
    content inside a block of its own and an inline ::before ahead of a block
    lands on its own line above the value. Absolute is the same answer the funnel
    and the picker chevron already use, and it holds in both views. */
-/* Specific enough to beat the editor's own cell padding. A bare attribute
-   selector loses to it, and the icon then lands on top of the value instead of
-   in the space that was meant to be cleared for it. */
+/* The gap for the icon is made with text-indent, not padding, and that is the
+   whole trick. The editor sets the padding shorthand on its cells at a
+   specificity a longhand padding-left cannot beat without !important, which
+   this stylesheet does not use; nothing anywhere sets text-indent on a table
+   cell, so there is no argument to lose. It inherits too, which matters because
+   Live Preview puts a cell's content inside a block of its own: the indent
+   reaches that block's first line, which is exactly the line the icon sits on. */
 :is(.markdown-rendered, .cm-table-widget) :is(td, th)[data-ptb-icon] {
 	position: relative;
-	padding-left: 22px;
+	text-indent: 20px;
 }
 
 [data-ptb-icon]::before {
