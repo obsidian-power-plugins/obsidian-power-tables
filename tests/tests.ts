@@ -95,6 +95,10 @@ import {
 	barPercents,
 	summarizeRows,
 	planSummarize,
+	planRemoveDuplicates,
+	planTranspose,
+	planTextToColumns,
+	planFindReplace,
 	SummaryFn,
 	iconBands,
 	listTag,
@@ -1242,6 +1246,73 @@ const pasted = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }],
 ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as plain values");
 eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
 eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
+
+// --- cleanup: remove duplicates, transpose, text to columns, find and replace ---
+const DUP = [
+	"| Name | City | N |",
+	"| - | - | - |",
+	"| Ann | East | 1 |",
+	"| Bob | West | 2 |",
+	"| Ann | East | 3 |",
+	"| ann | east | 4 |",
+	"| Bob | East | 5 |",
+];
+const CLN = { line: 2, col: 0, expect: null };
+const deduped = applyPlan(DUP, planRemoveDuplicates(DUP.slice(), CLN, [0, 1]));
+eq(deduped.length, 5, "two rows repeat the first two columns of an earlier one and go");
+eq(deduped[2], "| Ann | East | 1 |", "the first of each set is the one that stays");
+eq(deduped[3], "| Bob | West | 2 |", "and the order of what is left is untouched");
+eq(deduped[4], "| Bob | East | 5 |", "a row matching on only one of the two columns is not a duplicate");
+eq(planRemoveDuplicates(DUP.slice(), CLN, [0])!.removed, 3, "narrowing to one column finds more of them");
+eq(planRemoveDuplicates(DUP.slice(), CLN, null)!.removed, 0, "and comparing every column finds none here, the third column differing on every row");
+eq(planRemoveDuplicates(["| A |", "| - |", "| 1 |", "| 2 |"], CLN, null)!.removed, 0, "a table with no repeats is left alone");
+// case folds, which is what makes "ann/east" a repeat of "Ann/East"
+ok(!applyPlan(DUP, planRemoveDuplicates(DUP.slice(), CLN, [0, 1])).some((l) => l.includes("| ann |")), "matching ignores case");
+
+// a row removed from under a formula says so rather than pointing at its neighbour
+const DUPF = ["| A | B |", "| - | - |", "| x | 1 |", "| x | 2 |", "| y | =B3 |"];
+const dedupF = applyPlan(DUPF, planRemoveDuplicates(DUPF.slice(), CLN, [0]));
+ok(dedupF.some((l) => l.includes("#REF!")), "a formula that pointed at a removed row reads #REF!");
+
+// transpose
+const TRP = ["| A | B | C |", "| - | - | - |", "| 1 | 2 | 3 |", "| 4 | 5 | 6 |"];
+const flipped = applyPlan(TRP, planTranspose(TRP.slice(), CLN));
+eq(flipped[0], "| A | 1 | 4 |", "the first column of the transposed table is the old header row");
+eq(flipped[1], "|" + " --- |".repeat(3), "with a fresh divider under it, sized to the new width");
+eq(flipped[2], "| B | 2 | 5 |", "and each old column becomes a row");
+eq(flipped[3], "| C | 3 | 6 |", "to the end of them");
+eq(flipped.length, 4, "three columns and two rows come back as three rows and two columns");
+// a formula cannot survive the axes swapping, so it lands as the number it showed
+const TRF = applyPlan(["| A | B |", "| - | - |", "| 2 | =A2*3 |"], { edits: recalcCalcs(["| A | B |", "| - | - |", "| 2 | =A2*3 |"]) });
+const flippedF = applyPlan(TRF, planTranspose(TRF.slice(), CLN));
+ok(!flippedF.join("\n").includes("data-f"), "a transposed formula is frozen to its value");
+ok(flippedF.join("\n").includes("6"), "which is the number it was showing");
+
+// text to columns
+const TTC = ["| Who | N |", "| - | - |", "| Ann Lee | 1 |", "| Bob Ray Fox | 2 |"];
+const split = applyPlan(TTC, planTextToColumns(TTC.slice(), CLN, " "));
+eq(split[0], "| Who |   |   | N |", "the widest value decides how many columns are added");
+eq(split[2], "| Ann | Lee |   | 1 |", "a two-part value fills the first two and leaves the third blank");
+eq(split[3].split("|")[1].trim(), "Bob", "and a three-part value fills all three");
+eq(split[3].split("|")[3].trim(), "Fox", "to its last piece");
+eq(planTextToColumns(TTC.slice(), CLN, "~")!.added, 0, "a delimiter that appears nowhere adds no columns");
+
+// find and replace
+const FRP = ["| A | B |", "| - | - |", "| cat | Cat |", "| concat | 2 |"];
+const fr1 = applyPlan(FRP, planFindReplace(FRP.slice(), CLN, "cat", "dog", {}));
+eq(fr1[2], "| dog | dog |", "replace is case insensitive by default, and reaches every cell");
+eq(fr1[3], "| condog | 2 |", "including inside a longer word");
+const fr2 = applyPlan(FRP, planFindReplace(FRP.slice(), CLN, "cat", "dog", { matchCase: true }));
+eq(fr2[2], "| dog | Cat |", "match case leaves the other capitalisation alone");
+const fr3 = applyPlan(FRP, planFindReplace(FRP.slice(), CLN, "cat", "dog", { wholeCell: true }));
+eq(fr3[3], "| concat | 2 |", "whole cell will not touch a cell that merely contains it");
+eq(planFindReplace(FRP.slice(), CLN, "cat", "dog", {})!.hits, 3, "the count is of cells changed");
+// a formula is code, and find-and-replace is not a way to edit code
+const FRF = ['| A | B |', "| - | - |", '| cat | <span class="ptb" data-f="=CONCAT(A2,\'cat\')">x</span> |'];
+const fr4 = applyPlan(FRF, planFindReplace(FRF.slice(), CLN, "cat", "dog", {}));
+ok(fr4[2].includes("=CONCAT(A2,'cat')"), "a formula is left alone by find and replace");
+ok(fr4[2].includes("| dog |"), "while the plain cell beside it is replaced");
+eq(planFindReplace(FRP.slice(), CLN, "", "x", {}), null, "replacing nothing is not a thing to do");
 
 // --- summarize ---
 const SUMT = [

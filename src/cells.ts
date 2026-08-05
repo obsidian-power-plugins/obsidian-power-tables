@@ -5339,6 +5339,267 @@ export function planPasteCells(
 	};
 }
 
+/* ---------------- cleanup: the things people open Excel to do ---------------- */
+
+/** Apply a plan's edits to a copy of the lines. The structural cleanups work by
+ *  running an existing plan repeatedly against a working document, which is how
+ *  they inherit its reference rewriting instead of reimplementing it. */
+function applyTo(lines: string[], plan: EditPlan | null): string[] {
+	if (!plan) return lines;
+	const out = lines.slice();
+	let off = 0;
+	for (const e of [...plan.edits].sort((a, b) => a.line - b.line)) {
+		const idx = e.line + off;
+		if (e.kind === "insert") {
+			out.splice(Math.max(0, Math.min(idx, out.length)), 0, e.text);
+			off++;
+		} else if (e.kind === "delete") {
+			if (idx >= 0 && idx < out.length) {
+				out.splice(idx, 1);
+				off--;
+			}
+		} else if (idx >= 0 && idx < out.length) {
+			out[idx] = e.text;
+		}
+	}
+	return out;
+}
+
+/** A table's lines swapped for new ones, as the smallest set of edits: the same
+ *  shape planImportRows uses when it replaces a table. */
+function planReplaceTable(
+	lines: string[],
+	start: number,
+	end: number,
+	fresh: string[],
+	cursorLine: number,
+	cursorCh: number
+): EditPlan {
+	const edits: { line: number; text: string; kind?: EditKind }[] = [];
+	const oldCount = end - start + 1;
+	const common = Math.min(oldCount, fresh.length);
+	for (let i = 0; i < common; i++) {
+		if (fresh[i] !== lines[start + i]) edits.push({ line: start + i, text: fresh[i] });
+	}
+	for (let i = common; i < fresh.length; i++) edits.push({ line: end + 1, text: fresh[i], kind: "insert" });
+	for (let i = start + common; i <= end; i++) edits.push({ line: i, text: "", kind: "delete" });
+	return { edits, cursorLine, cursorCh };
+}
+
+/** The cells of a table's body rows, and the lines they came from. */
+function bodyOf(lines: string[], start: number, end: number, delimIdx: number): { line: number; row: ParsedRow }[] {
+	const out: { line: number; row: ParsedRow }[] = [];
+	for (let i = delimIdx + 1; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) out.push({ line: i, row: r });
+	}
+	void start;
+	return out;
+}
+
+/**
+ * Drop rows that repeat an earlier one, comparing only the chosen columns.
+ *
+ * The first of each set stays, which is Excel's rule and the only one that
+ * keeps a table's order meaningful. Rows go through planDeleteRow one at a time
+ * and from the bottom up, so the formulas left behind are rewritten by the code
+ * that already knows how, and a row removed from under a reference reads #REF!
+ * rather than quietly pointing at its neighbour.
+ */
+export function planRemoveDuplicates(
+	lines: string[],
+	target: CellTargetLoc,
+	cols: number[] | null
+): (EditPlan & { removed: number }) | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const { start, end, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const body = bodyOf(lines, start, end, delimIdx);
+	if (!body.length) return null;
+
+	const seen = new Set<string>();
+	const drop: number[] = [];
+	for (const { line, row } of body) {
+		const use = cols && cols.length ? cols : Array.from({ length: row.cellCount }, (_, i) => i);
+		const key = use
+			.map((c) => (c < row.cellCount ? normalizeText(parseCellContent(row.pieces[c + 1]).inner).trim().toLowerCase() : ""))
+			.join(" ");
+		if (seen.has(key)) drop.push(line);
+		else seen.add(key);
+	}
+	if (!drop.length) return { edits: [], cursorLine: ln, cursorCh: cursorForCol(lines[ln], target.col), removed: 0 };
+
+	let work = lines;
+	for (const line of [...drop].sort((a, b) => b - a)) {
+		work = applyTo(work, planDeleteRow(work, { line, col: 0, expect: null }));
+	}
+	const fresh = work.slice(start, end + 1 - drop.length);
+	const plan = planReplaceTable(lines, start, end, fresh, start, 2);
+	return { ...plan, removed: drop.length };
+}
+
+/**
+ * Swap the table's rows and columns.
+ *
+ * Formulas and live calcs are frozen to the values they were showing first. A
+ * transposed reference does not point where it pointed: =SUM(B2:B5) reads a
+ * column, and after the swap that same column is a row somewhere else entirely.
+ * Excel rewrites references when it transposes; doing that here means teaching
+ * the reference rewriter an axis swap, and until it knows one, a number that
+ * was right is a better answer than a formula that is wrong.
+ */
+export function planTranspose(lines: string[], target: CellTargetLoc): (EditPlan & { rows: number }) | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const { start, end, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const hr = parseRow(lines[start]);
+	if (!hr || hr.isDelim) return null;
+
+	const grid: string[][] = [];
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (!r || r.isDelim) continue;
+		// the cell keeps its look and loses its formula, which is the freeze
+		grid.push(
+			Array.from({ length: r.cellCount }, (_, c) => {
+				const p = parseCellContent(r.pieces[c + 1]);
+				const content = buildCellContent(p.inner, p.bg, p.fg, null, null, p.borders, p.fmt, p.hl);
+				return content || p.inner;
+			})
+		);
+	}
+	if (grid.length < 2) return null;
+	const width = Math.max(...grid.map((g) => g.length));
+	const fresh: string[] = [];
+	for (let c = 0; c < width; c++) {
+		const row = grid.map((g) => g[c] ?? "");
+		fresh.push(hr.prefix + "| " + row.map((v) => v.trim()).join(" | ") + " |");
+		if (c === 0) fresh.push(hr.prefix + "|" + Array(grid.length).fill(" --- ").join("|") + "|");
+	}
+	return { ...planReplaceTable(lines, start, end, fresh, start, 2), rows: width };
+}
+
+/**
+ * Split the targeted column on a delimiter, across the columns to its right.
+ *
+ * New columns are added by planInsertColumn, one at a time, so the formulas in
+ * the table follow the letters as they shift. What lands is text: a piece of a
+ * split value has no formula to keep.
+ */
+export function planTextToColumns(
+	lines: string[],
+	target: CellTargetLoc,
+	delim: string
+): (EditPlan & { added: number; split: number }) | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	if (!delim) return null;
+	const { start, end, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const anchor = parseRow(lines[ln]);
+	if (!anchor) return null;
+	const col = Math.min(target.col, anchor.cellCount - 1);
+
+	const body = bodyOf(lines, start, end, delimIdx);
+	const parts = body.map(({ row }) =>
+		col < row.cellCount ? parseCellContent(row.pieces[col + 1]).inner.split(delim).map((s) => s.trim()) : [""]
+	);
+	const widest = Math.max(1, ...parts.map((p) => p.length));
+	if (widest < 2) return { edits: [], cursorLine: ln, cursorCh: cursorForCol(lines[ln], col), added: 0, split: 0 };
+
+	let work = lines;
+	for (let i = 0; i < widest - 1; i++) {
+		work = applyTo(work, planInsertColumn(work, { line: ln, col, expect: null }, "right"));
+	}
+	// write the pieces into the column and the fresh ones beside it
+	const b2 = tableBounds(work, ln);
+	let split = 0;
+	for (let i = 0; i < body.length; i++) {
+		const line = b2.delimIdx + 1 + i;
+		const r = parseRow(work[line]);
+		if (!r) continue;
+		for (let k = 0; k < widest; k++) {
+			const at = col + k;
+			if (at >= r.cellCount) continue;
+			const piece = parts[i][k] ?? "";
+			const p = parseCellContent(r.pieces[at + 1]);
+			// the original cell's look stays on the first piece and the rest land plain
+			const content = k === 0 ? buildCellContent(piece, p.bg, p.fg, null, null, p.borders, p.fmt, p.hl, p) : piece;
+			r.pieces[at + 1] = content ? ` ${content} ` : "   ";
+		}
+		work[line] = r.prefix + r.pieces.join("|");
+		if (parts[i].length > 1) split++;
+	}
+	const fresh = work.slice(b2.start, b2.end + 1);
+	return { ...planReplaceTable(lines, start, end, fresh, ln, 2), added: widest - 1, split };
+}
+
+/** Replace text throughout the table's cells, leaving formulas and every marker
+ *  alone: this changes what cells say, not what they are. */
+export function planFindReplace(
+	lines: string[],
+	target: CellTargetLoc,
+	find: string,
+	replace: string,
+	opts: { matchCase?: boolean; wholeCell?: boolean } = {}
+): (EditPlan & { hits: number }) | null {
+	const ln = locateLine(lines, target);
+	if (ln == null || !find) return null;
+	const { start, end, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx < 0) return null;
+	const edits: { line: number; text: string }[] = [];
+	let hits = 0;
+	const needle = opts.matchCase ? find : find.toLowerCase();
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (!r || r.isDelim) continue;
+		let changed = false;
+		for (let c = 0; c < r.cellCount; c++) {
+			const p = parseCellContent(r.pieces[c + 1]);
+			// a formula's text is not the cell's text; rewriting it here would
+			// edit code by find-and-replace, which is nobody's intention
+			if (p.formula) continue;
+			const hay = opts.matchCase ? p.inner : p.inner.toLowerCase();
+			let next: string;
+			if (opts.wholeCell) {
+				if (hay.trim() !== needle.trim()) continue;
+				next = replace;
+			} else {
+				if (!hay.includes(needle)) continue;
+				next = replaceAll(p.inner, find, replace, !opts.matchCase);
+			}
+			if (next === p.inner) continue;
+			const content = buildCellContent(next, p.bg, p.fg, p.calc, null, p.borders, p.fmt, p.hl, p);
+			r.pieces[c + 1] = content ? ` ${content} ` : "   ";
+			changed = true;
+			hits++;
+		}
+		if (changed) edits.push({ line: i, text: r.prefix + r.pieces.join("|") });
+	}
+	return { edits, cursorLine: ln, cursorCh: cursorForCol(lines[ln], target.col), hits };
+}
+
+/** Literal replace, optionally case-insensitive. Written out rather than built
+ *  into a RegExp so a search for "$1" or "a.b" means those characters. */
+function replaceAll(hay: string, find: string, replace: string, fold: boolean): string {
+	const h = fold ? hay.toLowerCase() : hay;
+	const n = fold ? find.toLowerCase() : find;
+	let out = "";
+	let i = 0;
+	while (i < hay.length) {
+		const at = h.indexOf(n, i);
+		if (at < 0) {
+			out += hay.slice(i);
+			break;
+		}
+		out += hay.slice(i, at) + replace;
+		i = at + n.length;
+	}
+	return out;
+}
+
 /* ---------------- summarize: a pivot whose output is an ordinary table ---------------- */
 
 export type SummaryFn = "sum" | "count" | "avg" | "min" | "max";
