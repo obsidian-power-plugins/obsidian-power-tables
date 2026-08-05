@@ -14,7 +14,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 ## Features at a glance
 
 - Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column; color scales, data bars and icon sets
-- Live totals and Excel-style formulas: 42 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
+- Live totals and Excel-style formulas: 48 functions including `XLOOKUP`, `SUMIFS`/`COUNTIFS`, `INDEX`/`MATCH`, `IFS`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
 - Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
 - Copy, cut and paste a block of cells with Ctrl+C/X/V, formulas and formatting included, plus paste special: values, formulas, formats, transpose
@@ -207,10 +207,17 @@ Cells can hold Excel-style formulas. Type `=SUM(B2:B4)` (or `=C2*1.08`, `=AVG(B2
 | Math and stats | `SUM` `AVG`/`AVERAGE` `MIN` `MAX` `MEDIAN` `PRODUCT` `SUMPRODUCT` `STDEV` `POWER` `SQRT` `INT` `MOD` `ABS` `ROUND` `ROUNDUP` `ROUNDDOWN` |
 | Filtered totals | `SUBTOTAL(9, B2:B20)`, and the other function codes, which skip what an [AutoFilter](#autofilter) is hiding |
 | Counting | `COUNT` `COUNTA` `COUNTBLANK` |
-| Conditional | `IF` `IFERROR` `AND` `OR` `NOT` `SUMIF` `COUNTIF` `AVERAGEIF` |
+| Conditional | `IF` `IFS` `SWITCH` `IFERROR` `AND` `OR` `NOT` `SUMIF` `COUNTIF` `AVERAGEIF` |
+| Multi-criteria | `SUMIFS` `COUNTIFS` `AVERAGEIFS`, each taking as many range/criteria pairs as you need |
 | Text | `LEN` `LEFT` `RIGHT` `MID` `TRIM` `UPPER` `LOWER` `CONCAT` |
-| Lookup | `VLOOKUP` `MATCH` `INDEX` |
+| Lookup | `XLOOKUP` `VLOOKUP` `MATCH` `INDEX` |
 | Dates | `YEAR` `MONTH` `DAY`, read off a date cell |
+
+**The multi-criteria ones take Excel's argument order**, which is the reverse of their single-criteria siblings and is where everyone trips: `SUMIF(range, criteria, [sum_range])` puts the condition first, while `SUMIFS(sum_range, range1, criteria1, …)` puts the totals first and then as many range/criteria pairs as you like. `COUNTIFS` is pairs only. Every range has to be the same size as the one being aggregated; a mismatch is a `#VALUE!` rather than a quiet answer lined up from the top. Criteria read the same as they always did, so `">100"` and `"East"` both work.
+
+`XLOOKUP(value, lookup_array, return_array, [if_not_found])` is the one worth reaching for over `VLOOKUP`: the column you want back is named rather than counted off, so **it can sit to the left of the one you search**, and the fourth argument answers a miss without an `IFERROR` that would also swallow real errors.
+
+`IFS(cond1, val1, cond2, val2, …)` replaces nested `IF`s and returns `#N/A` if nothing matches, which is why a final always-true condition is how you write "otherwise". `SWITCH(value, match1, result1, …, [default])` does the same against a value rather than a condition, and takes its default as a spare argument on the end.
 
 Operators are Excel's, with Excel's precedence: `+ - * / ( )`, `^` for powers (right associative, so `2^3^2` is 512), `&` to join text, a postfix `%`, and the comparisons `= <> > < >= <=`. Unary minus binds tighter than `^`, so `-2^2` is 4, same as Excel. Everything is evaluated by a built-in parser, never `eval`. `TODAY()` and `NOW()` are deliberately absent: computed values are stored in the note, so a clock-dependent formula would rewrite your notes on open every time the date rolled over. **Fill down and fill right** write a formula once and apply it to a range. Drag-select the cells and run *Fill down* (the panel's `Fill ↓`, the right-click menu, or the command, which takes a hotkey if you want Excel's Ctrl+D): the top of the selection copies into the rest, and each copy's references move with it, so `=C2-B2` becomes `=C3-B3` down the column. With a single cell targeted it fills from the row above, the way Ctrl+D does in Excel. *Fill right* is the same across columns. Anchor anything that shouldn't travel with `$`: `=B3*$B$2` filled down keeps reading the one rate cell while its other reference follows each row. `$B$2` pins both, `$B2` pins the column, `B$2` pins the row, exactly as in Excel, and anchors are ignored when the formula is simply evaluated. Note that a `$` only holds a copy still: inserting a row above an anchored cell still moves the reference, because the cell itself moved, which is also how Excel behaves.
 
