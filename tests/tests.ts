@@ -76,6 +76,9 @@ import {
 	tableGrid,
 	gridRowOf,
 	blockTargets,
+	fillSeries,
+	planDragFill,
+	dragFillPreview,
 	shiftFormulaRefs,
 	formulaErrorText,
 	FORMULA_FUNCTIONS,
@@ -849,6 +852,60 @@ eq(
 	JSON.stringify(blockTargets(0, { r1: 1, r2: 3, c1: 0, c2: 2 })),
 	"a block dragged up and left is the block dragged down and right"
 );
+
+// --- the fill handle's series ---
+const SER = (seed: string[], n: number) => fillSeries(seed, n).join("|");
+// dates: one cell steps a day, which is what Steve's screenshot drags
+eq(SER(["8/4/2026"], 3), "8/5/2026|8/6/2026|8/7/2026", "a lone date walks a day at a time");
+eq(SER(["8/4/2026", "8/11/2026"], 2), "8/18/2026|8/25/2026", "two dates set the interval, here a week");
+eq(SER(["1/31/2026", "2/28/2026"], 1), "3/31/2026", "a month series holds the day of the month, clamped where the month is short");
+eq(SER(["2026-08-04"], 2), "2026-08-05|2026-08-06", "the seed's own date style is the one written back");
+eq(SER(["Aug 4, 2026"], 1), "Aug 5, 2026", "including the spelled ones");
+eq(SER(["12/31/2026"], 1), "1/1/2027", "and the year rolls");
+// numbers: a lone one copies, two set the step, presentation is preserved
+eq(SER(["7"], 3), "7|7|7", "a lone number copies, the way a rate dragged down a column should");
+eq(SER(["1", "2"], 3), "3|4|5", "two numbers set the step");
+eq(SER(["10", "20", "30"], 2), "40|50", "and a longer run keeps it");
+eq(SER(["5", "3"], 2), "1|-1", "a falling series keeps falling, through zero");
+eq(SER(["$1,000.00", "$2,000.00"], 1), "$3,000.00", "currency, grouping and decimals all survive");
+eq(SER(["50%", "60%"], 1), "70%", "so does a percent");
+eq(SER(["(100)", "(200)"], 1), "(300)", "and accounting parentheses on a negative");
+// times, names, and text carrying a number
+eq(SER(["9:00 AM"], 2), "10:00 AM|11:00 AM", "a lone time steps an hour");
+eq(SER(["9:00 AM", "9:30 AM"], 1), "10:00 AM", "two times set their own interval");
+eq(SER(["Mon"], 3), "Tue|Wed|Thu", "weekdays walk");
+eq(SER(["Sat"], 2), "Sun|Mon", "and wrap round the week rather than counting backwards");
+eq(SER(["January", "March"], 1), "May", "months take the step they are given, spelled as they were spelled");
+eq(SER(["Item 1"], 2), "Item 2|Item 3", "text carrying a number increments the number");
+eq(SER(["Q1 2026"], 1), "Q1 2027", "the LAST number in the text is the one that moves");
+eq(SER(["Row 08"], 2), "Row 09|Row 10", "zero padding is kept");
+// anything with no series in it repeats, which is a spreadsheet's answer too
+eq(SER(["Total"], 2), "Total|Total", "plain text copies");
+eq(SER(["red", "blue"], 4), "red|blue|red|blue", "and a block with no pattern cycles");
+eq(SER([""], 2), "|", "empty stays empty");
+// a drag up passes its seed reversed, so one function answers both directions
+eq(SER(["8/6/2026", "8/5/2026"], 2), "8/4/2026|8/3/2026", "reading the seed backwards walks the series backwards");
+
+// --- planDragFill: the drag as one edit ---
+const FH = ["| Date | Amount | Note |", "| - | - | - |", "| 8/4/2026 | 10 | a |", "| | | |", "| | | |"];
+const fh = planDragFill(FH.slice(), [{ line: 2, col: 0 }], { line: 4, col: 0 })!;
+eq(fh.filled, 2, "dragging one cell down two rows writes two cells");
+const fhOut = applyPlan(FH.slice(), fh);
+eq(fhOut[3].includes("8/5/2026"), true, "the row below takes the next date");
+eq(fhOut[4].includes("8/6/2026"), true, "and the one after that the one after");
+eq(fhOut[3].includes("| a |"), false, "the other columns are untouched by a single-column drag");
+// every column of a multi-column seed projects on its own
+const fh2 = planDragFill(FH.slice(), [{ line: 2, col: 0 }, { line: 2, col: 1 }], { line: 3, col: 1 })!;
+const fh2Out = applyPlan(FH.slice(), fh2);
+eq(fh2Out[3].includes("8/5/2026"), true, "the date column walks");
+eq(fh2Out[3].includes("| 10 |"), true, "while the lone number beside it copies");
+// a formula lane is copied with its references shifted, never extrapolated
+const FF = ["| A | B | C |", "| - | - | - |", "| 2 | 3 | =A3*B3 |", "| 4 | 5 | |"];
+const ff = planDragFill(FF.slice(), [{ line: 2, col: 2 }], { line: 3, col: 2 })!;
+ok(applyPlan(FF.slice(), ff)[3].includes("=A4*B4"), "a filled formula follows the row it landed on");
+eq(dragFillPreview(FF, [{ line: 2, col: 2 }], { line: 3, col: 2 }), "=A4*B4", "and the label says so before the drop");
+eq(dragFillPreview(FH, [{ line: 2, col: 0 }], { line: 4, col: 0 }), "8/6/2026", "the label reads the value that will land, not the next one");
+ok(planDragFill(FH.slice(), [{ line: 2, col: 0 }], { line: 2, col: 0 }) === null, "a drag that goes nowhere writes nothing");
 
 // a header cell can hold a formula, and it computes and is referable like any
 // other cell now that it has an address

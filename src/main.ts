@@ -32,6 +32,8 @@ import {
 	CalcSpec,
 	ColAlign,
 	blockTargets,
+	dragFillPreview,
+	planDragFill,
 	DATE_PATTERNS,
 	DateParts,
 	EditPlan,
@@ -199,6 +201,7 @@ interface PowerTablesSettings {
 	fmtModalY: number | null;
 	openOnStart: boolean;
 	cellRefs: boolean;
+	fillHandle: boolean;
 	/** Dock the formatting + formula strip over a table while the cursor is in one. */
 	tableBar: boolean;
 	/** Draw Borders pen: the style it lays down and the colour it uses. */
@@ -234,6 +237,7 @@ const DEFAULT_SETTINGS: PowerTablesSettings = {
 	fmtModalY: null,
 	openOnStart: false,
 	cellRefs: true,
+	fillHandle: true,
 	tableBar: true,
 	penStyle: "thin",
 	penColor: "default",
@@ -798,7 +802,9 @@ export default class PowerTablesPlugin extends Plugin {
 			"pointerdown",
 			(evt) => {
 				if (!(evt.target instanceof Element)) return;
-				if (evt.target.closest(".ptb-panel, .ptb-toolbar, .ptb-tablebar, .ptb-stats, .menu, .modal")) return;
+				// A press on the fill handle acts ON the selection, so it is not
+				// the start of a new one and must not clear the old one.
+				if (evt.target.closest(".ptb-panel, .ptb-toolbar, .ptb-tablebar, .ptb-stats, .ptb-fh, .menu, .modal")) return;
 				if (evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.dropStickySelection();
 				else this.leaveTableContext();
 			},
@@ -809,6 +815,8 @@ export default class PowerTablesPlugin extends Plugin {
 		// remembered selection for any press in a table, guides included, and
 		// this one then puts the new selection in its place.
 		this.registerDomEvent(document, "pointerdown", (evt) => this.onGuideDown(evt), { capture: true });
+		// the fill handle, on the same terms: the press must not reach the cell
+		this.registerDomEvent(document, "pointerdown", (evt) => this.onFillDown(evt), { capture: true });
 		this.registerDomEvent(document, "focusin", (evt) => {
 			if (evt.target instanceof Element && evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.updatePanels();
 		});
@@ -957,6 +965,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.renderCheckboxes();
 		this.renderFilterRows();
 		this.renderGuides();
+		this.renderFillHandle();
 	}
 
 	/* ---------------- reference guides (column letters + row numbers) ---------------- */
@@ -1248,6 +1257,159 @@ export default class PowerTablesPlugin extends Plugin {
 	private clearGuidePaint() {
 		document.body.querySelectorAll(".ptb-sel").forEach((c) => c.removeClass("ptb-sel"));
 		document.body.querySelectorAll(".ptb-guide.is-active").forEach((g) => g.removeClasses(["is-active", "is-lead"]));
+	}
+
+	/* ---------------- the fill handle ---------------- */
+
+	/**
+	 * The cell the handle hangs off: the bottom-right of whatever is selected,
+	 * or the one cell being worked in.
+	 *
+	 * Obsidian's own selected-cell objects carry the elements they were built
+	 * from, so in Live Preview the corner is asked of them rather than worked out
+	 * from coordinates. Failing that it is the plugin's own painted selection,
+	 * then Reading view's outlined cell.
+	 */
+	private handleAnchor(): HTMLTableCellElement | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (view && view.getMode() !== "preview") {
+			const em = (view as unknown as { editMode?: unknown }).editMode ?? view.editor;
+			const tc = (
+				em as {
+					tableCell?: { table?: { selectedCells?: unknown[] }; cell?: { el?: unknown } };
+				} | null
+			)?.tableCell;
+			const sel = tc?.table?.selectedCells;
+			if (Array.isArray(sel) && sel.length) {
+				let best: { row: number; col: number; el?: unknown } | null = null;
+				for (const raw of sel) {
+					const c = raw as { row?: number; col?: number; el?: unknown };
+					if (typeof c.row !== "number" || typeof c.col !== "number") continue;
+					if (!best || c.row > best.row || (c.row === best.row && c.col > best.col)) {
+						best = { row: c.row, col: c.col, el: c.el };
+					}
+				}
+				if (best?.el instanceof HTMLTableCellElement) return best.el;
+			}
+			if (tc?.cell?.el instanceof HTMLTableCellElement) return tc.cell.el;
+		}
+		const painted = document.body.querySelectorAll<HTMLTableCellElement>("td.ptb-sel, th.ptb-sel");
+		if (painted.length) return painted[painted.length - 1];
+		return this.outlined?.closest<HTMLTableCellElement>("td, th") ?? null;
+	}
+
+	/** Keep the handle on the corner of whatever is selected now. Cheap enough to
+	 *  run from every panel refresh, which is what keeps it in step. */
+	private renderFillHandle() {
+		const cell = this.settings.fillHandle ? this.handleAnchor() : null;
+		const existing = document.body.querySelector<HTMLElement>(".ptb-fh");
+		if (!cell || !cell.closest(":is(.markdown-rendered, .cm-table-widget) table")) {
+			existing?.remove();
+			return;
+		}
+		if (existing?.parentElement === cell) return;
+		existing?.remove();
+		cell.append(
+			createDiv({
+				cls: "ptb-fh",
+				attr: { title: "Drag to fill: a series where the cells describe one, a copy where they do not" },
+			})
+		);
+	}
+
+	/** Grid row index of a doc line, given the table's first line: the inverse of
+	 *  the sum every fill and click path does in the other direction. */
+	private gridRowOfLine(start: number, line: number): number {
+		return line === start ? 0 : line - start - 1;
+	}
+
+	/**
+	 * Drag the handle. The pointer picks an axis by leaving the seed's rows or
+	 * its columns, the cells it would write are outlined as it goes, and a label
+	 * follows it reading the value that will land where it is, which is the one
+	 * part of Excel's handle that makes the rest legible.
+	 */
+	private onFillDown(evt: PointerEvent) {
+		if (evt.button !== 0 || !(evt.target instanceof Element)) return;
+		if (!evt.target.closest(".ptb-fh")) return;
+		const anchor = evt.target.closest<HTMLTableCellElement>("td, th");
+		const table = anchor?.closest<HTMLTableElement>("table");
+		if (!anchor || !table) return;
+		evt.preventDefault();
+		evt.stopPropagation();
+
+		const sel = this.widgetSelection();
+		const single = sel ? null : this.resolveTarget(true);
+		const seed = sel ? sel.targets.map((t) => ({ line: t.line, col: t.col })) : single ? [{ line: single.line, col: single.col }] : [];
+		const path = sel?.path ?? single?.path;
+		const editor = sel?.editor ?? single?.editor ?? (path ? this.editorForPath(path) : null);
+		const anchorDoc = this.docCellFromDom(anchor);
+		if (!seed.length || !path || !editor || !anchorDoc || anchorDoc.path !== path) return;
+
+		// The document cannot change mid-drag, so one snapshot answers every
+		// preview; re-reading it per pointermove would be the same string.
+		const lines = editor.getValue().split("\n");
+		const rows = this.guideRows(table);
+		const anchorRow = rows.indexOf(anchor.closest<HTMLTableRowElement>("tr") as HTMLTableRowElement);
+		if (anchorRow < 0) return;
+		const start = anchorDoc.line - (anchorRow === 0 ? 0 : anchorRow + 1);
+		const seedRows = seed.map((s) => this.gridRowOfLine(start, s.line));
+		const r1 = Math.min(...seedRows);
+		const r2 = Math.max(...seedRows);
+		const c1 = Math.min(...seed.map((s) => s.col));
+		const c2 = Math.max(...seed.map((s) => s.col));
+
+		const tip = document.body.createDiv({ cls: "ptb-fh-tip" });
+		let dest: { line: number; col: number } | null = null;
+		const clear = () => {
+			table.querySelectorAll(".ptb-fh-to").forEach((c) => c.removeClass("ptb-fh-to"));
+		};
+
+		const move = (e: PointerEvent) => {
+			const over = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLTableCellElement>("td, th");
+			clear();
+			dest = null;
+			tip.toggleClass("is-shown", false);
+			if (!over || over.closest("table") !== table) return;
+			const row = rows.indexOf(over.closest<HTMLTableRowElement>("tr") as HTMLTableRowElement);
+			const col = over.cellIndex;
+			if (row < 0) return;
+			// out of the seed's rows makes it a row fill, out of its columns a
+			// column fill, and inside both means the drag is back where it began
+			const rowFill = row < r1 || row > r2;
+			const colFill = !rowFill && (col < c1 || col > c2);
+			if (!rowFill && !colFill) return;
+			const lo = rowFill ? Math.min(row, r1) : Math.min(col, c1);
+			const hi = rowFill ? Math.max(row, r2) : Math.max(col, c2);
+			for (let r = rowFill ? lo : r1; r <= (rowFill ? hi : r2); r++) {
+				for (let c = colFill ? lo : c1; c <= (colFill ? hi : c2); c++) {
+					if (r >= r1 && r <= r2 && c >= c1 && c <= c2) continue;
+					rows[r]?.cells[c]?.addClass("ptb-fh-to");
+				}
+			}
+			dest = { line: row === 0 ? start : start + row + 1, col };
+			const text = dragFillPreview(lines, seed, dest);
+			if (text == null) return;
+			tip.setText(text || "(empty)");
+			tip.toggleClass("is-shown", true);
+			tip.style.left = e.clientX + 14 + "px";
+			tip.style.top = e.clientY + 18 + "px";
+		};
+
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", up);
+			clear();
+			tip.remove();
+			const to = dest;
+			if (!to) return;
+			void this.runPlan({ path, editor, fromCursor: false }, (ls) => planDragFill(ls, seed, to));
+		};
+
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", up);
 	}
 
 	/** Apply one table's appearance overrides (data-tbl on a header-cell span)
@@ -3544,6 +3706,7 @@ export default class PowerTablesPlugin extends Plugin {
 
 	updatePanels() {
 		this.paintIfArmed();
+		this.renderFillHandle();
 		this.syncTableBar(this.maybeAutoReveal());
 		// the bar registers itself as a panel while we are here, so iterate a copy
 		for (const p of [...this.panels]) p.refresh();
@@ -5567,6 +5730,20 @@ class PowerTablesSettingTab extends PluginSettingTab {
 				s.addToggle((t) =>
 					t.setValue(this.plugin.settings.stripedRows).onChange(async (v) => {
 						this.plugin.settings.stripedRows = v;
+						await this.plugin.saveSettings();
+						this.plugin.applyAppearance();
+					})
+				);
+			},
+		});
+		appearance.push({
+			name: "Fill handle",
+			desc: "Put Excel's small square on the corner of the selection, to drag a series or a copy into the cells around it.",
+			help: "Drag the square on the bottom-right corner of the selection to fill the cells you drag over, and a label follows the pointer reading the value that will land there. What lands depends on what was selected, the way it does in a spreadsheet: dates walk a day (or a month, if the selection steps months), two numbers set their own step while a lone one copies, weekdays and month names walk, and text carrying a number increments it. Formulas are not extrapolated, they are copied with their references shifted to where they land, so =C2-B2 dragged down becomes =C3-B3. Anything with no series in it repeats. The whole drag is one edit, so it is one undo.",
+			build: (s) => {
+				s.addToggle((t) =>
+					t.setValue(this.plugin.settings.fillHandle).onChange(async (v) => {
+						this.plugin.settings.fillHandle = v;
 						await this.plugin.saveSettings();
 						this.plugin.applyAppearance();
 					})

@@ -3902,6 +3902,219 @@ export function planSelectionCalc(
 
 /* ---------------- prettify: re-pad cells so the raw pipes line up ---------------- */
 
+/* ---------------- the fill handle's series ----------------
+
+   Dragging the handle asks one question: what comes after these cells. The
+   answer is text in and text out, with no notion of a document, so every rule
+   below is testable on its own and the plan that uses them is only plumbing.
+
+   The seed always arrives in fill order, so dragging up or left is the same
+   problem as down or right with the seed read backwards, and one function
+   answers all four. Whatever no rule can read as a series repeats instead,
+   which is also what a spreadsheet does with it. */
+
+/** The step between evenly spaced values, or the average step when they are
+ *  not evenly spaced, which continues the line they describe. A lone value has
+ *  no step of its own and takes the default its kind is dragged with. */
+function seedStep(nums: number[], lone: number): number {
+	if (nums.length < 2) return lone;
+	return (nums[nums.length - 1] - nums[0]) / (nums.length - 1);
+}
+
+const DAY_MS = 86400000;
+const dayNumber = (p: DateParts) => Math.round(Date.UTC(p.y, p.m - 1, p.d) / DAY_MS);
+
+function dateFromDayNumber(n: number): DateParts {
+	const d = new Date(n * DAY_MS);
+	return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+}
+
+const lastDayOf = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+const isMonthEnd = (p: DateParts) => p.d === lastDayOf(p.y, p.m);
+
+/** Step whole months. A run sitting on month ends stays on them, so Jan 31 goes
+ *  to Feb 28 and on to Mar 31; any other run holds its day of the month and
+ *  clamps to the month landed in, so the 31st walks to the 30th, not the 1st. */
+function addMonths(p: DateParts, k: number, monthEnd: boolean): DateParts {
+	const total = p.y * 12 + (p.m - 1) + Math.round(k);
+	const y = Math.floor(total / 12);
+	const m = (((total % 12) + 12) % 12) + 1;
+	const last = lastDayOf(y, m);
+	return { y, m, d: monthEnd ? last : Math.min(p.d, last) };
+}
+
+/** Which of the date styles wrote this text, so the series keeps writing it. */
+function datePatternOf(p: DateParts, sample: string): DatePatternId {
+	return DATE_PATTERNS.find((id) => formatDateSpec(p, id) === sample.trim()) ?? "mdy";
+}
+
+function timePatternOf(t: TimeParts, sample: string): TimePatternId {
+	return TIME_PATTERNS.find((id) => formatTimeSpec(t, id) === sample.trim()) ?? "h12";
+}
+
+function dateSeries(seed: string[], count: number): string[] | null {
+	const parts = seed.map(parseDateCell);
+	if (parts.some((p) => !p)) return null;
+	const ps = parts as DateParts[];
+	const last = ps[ps.length - 1];
+	const pattern = datePatternOf(last, seed[seed.length - 1]);
+	// A run that holds its day of the month, or that sits on month ends, is a
+	// month series rather than a 28-to-31 day one. Testing that first is what
+	// keeps a month-end run from drifting a few days earlier every step, which
+	// matters most to the tables people keep months in.
+	const monthEnd = ps.every(isMonthEnd);
+	const gaps = new Set(ps.slice(1).map((p, i) => p.y * 12 + p.m - (ps[i].y * 12 + ps[i].m)));
+	const byMonth = ps.length > 1 && (monthEnd || ps.every((p) => p.d === ps[0].d)) && gaps.size === 1 && !gaps.has(0);
+	if (byMonth) {
+		const step = [...gaps][0];
+		return Array.from({ length: count }, (_, i) =>
+			formatDateSpec(addMonths(last, step * (i + 1), monthEnd), pattern)
+		);
+	}
+	const step = seedStep(ps.map(dayNumber), 1);
+	const base = dayNumber(last);
+	return Array.from({ length: count }, (_, i) => formatDateSpec(dateFromDayNumber(Math.round(base + step * (i + 1))), pattern));
+}
+
+function timeSeries(seed: string[], count: number): string[] | null {
+	const parts = seed.map(parseTimeCell);
+	if (parts.some((t) => !t)) return null;
+	const ts = parts as TimeParts[];
+	const secs = ts.map((t) => t.h * 3600 + t.min * 60 + (t.s ?? 0));
+	// a lone time steps by the hour, the way one dragged in a spreadsheet does
+	const step = seedStep(secs, 3600);
+	const last = ts[ts.length - 1];
+	const pattern = timePatternOf(last, seed[seed.length - 1]);
+	const base = secs[secs.length - 1];
+	return Array.from({ length: count }, (_, i) => {
+		const at = (((Math.round(base + step * (i + 1)) % 86400) + 86400) % 86400);
+		return formatTimeSpec({ h: Math.floor(at / 3600), min: Math.floor((at % 3600) / 60), s: last.s == null ? null : at % 60 }, pattern);
+	});
+}
+
+/**
+ * Render a projected number the way the seed wrote its own: same currency, same
+ * grouping, same decimals, same percent, same accounting parentheses for a
+ * negative. A series that changes how it looks halfway is not one.
+ */
+function likeNumber(value: number, sample: string): string {
+	const s = sample.trim();
+	const pct = /%\s*$/.test(s);
+	const paren = /^\(.*\)$/.test(s);
+	const currency = s.match(/\p{Sc}{1,3}/u)?.[0] ?? "";
+	const digits = s.replace(/[^\d.,]/g, "");
+	const dot = digits.lastIndexOf(".");
+	const decimals = dot < 0 ? 0 : digits.length - dot - 1;
+	const shown = pct ? value * 100 : value;
+	const body =
+		currency +
+		Math.abs(shown).toLocaleString("en-US", {
+			minimumFractionDigits: decimals,
+			maximumFractionDigits: decimals,
+			useGrouping: digits.includes(","),
+		}) +
+		(pct ? "%" : "");
+	if (shown >= 0) return body;
+	return paren ? `(${body})` : `-${body}`;
+}
+
+function numberSeries(seed: string[], count: number): string[] | null {
+	const nums = seed.map(parseNumeric);
+	if (nums.some((n) => !n)) return null;
+	const vs = (nums as { value: number }[]).map((n) => n.value);
+	// One number copies. That is the spreadsheet rule, and it is the right one:
+	// a column of the same rate is a far more common drag than 1, 2, 3.
+	const step = seedStep(vs, 0);
+	const last = vs[vs.length - 1];
+	const sample = seed[seed.length - 1];
+	return Array.from({ length: count }, (_, i) => likeNumber(last + step * (i + 1), sample));
+}
+
+/** Where a name sits in its list, matched whole or by its first three letters. */
+function nameIndex(list: string[], s: string): number {
+	const t = s.trim().toLowerCase();
+	if (!t) return -1;
+	return list.findIndex((n) => n.toLowerCase() === t || n.slice(0, 3).toLowerCase() === t);
+}
+
+/** Re-render a name as the seed wrote it: abbreviated stays abbreviated, and
+ *  an all-caps or all-lower seed keeps its case. */
+function likeName(full: string, sample: string): string {
+	const s = sample.trim();
+	const out = s.length <= 3 ? full.slice(0, 3) : full;
+	if (s === s.toUpperCase()) return out.toUpperCase();
+	if (s === s.toLowerCase()) return out.toLowerCase();
+	return out;
+}
+
+function nameSeries(seed: string[], count: number): string[] | null {
+	for (const list of [WEEKDAY_NAMES, MONTH_NAMES]) {
+		const idx = seed.map((s) => nameIndex(list, s));
+		if (idx.some((i) => i < 0)) continue;
+		// unwrap the wrap: Sat to Sun is +1, not -6
+		const walked = idx.slice();
+		for (let i = 1; i < walked.length; i++) {
+			while (walked[i] < walked[i - 1]) walked[i] += list.length;
+		}
+		const step = Math.round(seedStep(walked, 1)) || 1;
+		const last = walked[walked.length - 1];
+		const sample = seed[seed.length - 1];
+		return Array.from({ length: count }, (_, i) => {
+			const at = (((last + step * (i + 1)) % list.length) + list.length) % list.length;
+			return likeName(list[at], sample);
+		});
+	}
+	return null;
+}
+
+/* the last run of digits in a cell: ".*?" is lazy, so the only way the tail can
+   be all non-digits is for the run it found to be the final one */
+const TAIL_NUM_RE = /^(.*?)(\d+)(\D*)$/;
+
+function textNumberSeries(seed: string[], count: number): string[] | null {
+	const parts = seed.map((s) => s.match(TAIL_NUM_RE));
+	if (parts.some((m) => !m)) return null;
+	const ms = parts as RegExpMatchArray[];
+	const lead = ms[0][1];
+	const trail = ms[0][3];
+	if (ms.some((m) => m[1] !== lead || m[3] !== trail)) return null;
+	const nums = ms.map((m) => parseInt(m[2], 10));
+	const step = Math.round(seedStep(nums, 1)) || 1;
+	const last = nums[nums.length - 1];
+	const width = ms[ms.length - 1][2].length;
+	const padded = ms[ms.length - 1][2].startsWith("0");
+	return Array.from({ length: count }, (_, i) => {
+		const n = last + step * (i + 1);
+		const digits = padded ? String(Math.abs(n)).padStart(width, "0") : String(Math.abs(n));
+		return `${lead}${n < 0 ? "-" : ""}${digits}${trail}`;
+	});
+}
+
+/** No rule read it, so repeat the seed, which is what a spreadsheet does with a
+ *  block it cannot extrapolate. */
+function cycleSeed(seed: string[], count: number): string[] {
+	return Array.from({ length: count }, (_, i) => seed[i % seed.length]);
+}
+
+/**
+ * The next `count` values after a seed, the way dragging the fill handle
+ * projects them. The seed is in fill order; project always continues past its
+ * last entry, so a drag up or left passes its seed reversed.
+ */
+export function fillSeries(seed: string[], count: number): string[] {
+	if (count <= 0) return [];
+	const clean = seed.map((s) => s.trim());
+	if (!clean.length || clean.every((s) => !s)) return Array.from({ length: count }, () => "");
+	return (
+		dateSeries(clean, count) ??
+		timeSeries(clean, count) ??
+		numberSeries(clean, count) ??
+		nameSeries(clean, count) ??
+		textNumberSeries(clean, count) ??
+		cycleSeed(clean, count)
+	);
+}
+
 /**
  * Reformat the table's raw markdown the way Obsidian's own editor does:
  * every cell padded to its column's widest content, delimiter dashes
@@ -4010,6 +4223,180 @@ export function planFill(
 	}
 	const last = dstLines[dstLines.length - 1];
 	return { edits, cursorLine: last, cursorCh: cursorForCol(lines[last], dstCols[dstCols.length - 1]), filled };
+}
+
+/** One cell a drag of the fill handle would write: where it goes, what lands
+ *  in it, and which seed cell it takes its look and its formula from. */
+type FillDrop = { line: number; col: number; inner: string; src: { line: number; col: number }; op: RefOp };
+
+/**
+ * What a drag of the fill handle from `seed` onto `dest` would write.
+ *
+ * The axis is settled by where dest sits: outside the seed's rows makes it a
+ * row fill, otherwise outside its columns makes it a column fill. Each lane
+ * (one column of a row fill, one row of a column fill) is projected on its own
+ * from its own seed, which is what makes dragging a block of three columns fill
+ * three independent series rather than one repeated.
+ *
+ * A lane holding a formula or a live calc is not extrapolated. It is copied the
+ * way Fill Down copies it, with references shifted by the distance travelled,
+ * because "what comes after =C2-B2" is =C3-B3 and no series can say that.
+ */
+function dragFillDrops(lines: string[], seed: { line: number; col: number }[], dest: { line: number; col: number }): FillDrop[] {
+	if (!seed.length) return [];
+	const { start, end, delimIdx } = tableBounds(lines, seed[0].line);
+	if (delimIdx < 0) return [];
+	const rowLines: number[] = [];
+	for (let i = start; i <= end; i++) {
+		const r = parseRow(lines[i]);
+		if (r && !r.isDelim) rowLines.push(i);
+	}
+	const gridIdx = new Map(rowLines.map((l, k) => [l, k]));
+	const inSeed = seed.filter((t) => gridIdx.has(t.line));
+	if (!inSeed.length || !gridIdx.has(dest.line)) return [];
+
+	const r1 = Math.min(...inSeed.map((t) => t.line));
+	const r2 = Math.max(...inSeed.map((t) => t.line));
+	const c1 = Math.min(...inSeed.map((t) => t.col));
+	const c2 = Math.max(...inSeed.map((t) => t.col));
+	const seedRows = rowLines.filter((l) => l >= r1 && l <= r2);
+	const seedCols: number[] = [];
+	for (let c = c1; c <= c2; c++) seedCols.push(c);
+
+	// which way the drag went, and how far
+	let axis: "row" | "col";
+	let dstRows: number[] = [];
+	let dstCols: number[] = [];
+	if (dest.line < r1 || dest.line > r2) {
+		axis = "row";
+		dstRows =
+			dest.line > r2
+				? rowLines.filter((l) => l > r2 && l <= dest.line)
+				: rowLines.filter((l) => l >= dest.line && l < r1).reverse();
+		dstCols = seedCols;
+	} else if (dest.col < c1 || dest.col > c2) {
+		axis = "col";
+		dstRows = seedRows;
+		// nearest the seed first, so a series always projects outward from it
+		if (dest.col > c2) for (let c = c2 + 1; c <= dest.col; c++) dstCols.push(c);
+		else for (let c = c1 - 1; c >= dest.col; c--) dstCols.push(c);
+	} else {
+		return [];
+	}
+	if (!dstRows.length || !dstCols.length) return [];
+
+	const back = axis === "row" ? dest.line < r1 : dest.col < c1;
+	const lanes = axis === "row" ? dstCols : dstRows;
+	const drops: FillDrop[] = [];
+	for (const lane of lanes) {
+		// the lane's seed cells, nearest the drag last, so a series always
+		// continues past the edge the handle was pulled from
+		const along = axis === "row" ? seedRows : seedCols;
+		const order = back ? along.slice().reverse() : along;
+		const srcCells = order.map((v) =>
+			axis === "row" ? { line: v, col: lane } : { line: lane, col: v }
+		);
+		const pieces = srcCells.map((s) => {
+			const r = parseRow(lines[s.line]);
+			return r && s.col < r.cellCount ? r.pieces[s.col + 1] : "";
+		});
+		const parsed = pieces.map(parseCellContent);
+		const copying = parsed.some((p) => p.formula || p.calc || looksLikeFormula(p.inner));
+		const outs = axis === "row" ? dstRows : dstCols;
+		const values = copying ? [] : fillSeries(parsed.map((p) => p.inner), outs.length);
+		outs.forEach((v, i) => {
+			const at = axis === "row" ? { line: v, col: lane } : { line: lane, col: v };
+			// copying cycles the seed so a two-cell block alternates, the same
+			// rule the series path falls back on
+			const src = copying ? srcCells[i % srcCells.length] : srcCells[srcCells.length - 1];
+			const op: RefOp =
+				axis === "row"
+					? { axis: "row", kind: "offset", delta: (gridIdx.get(at.line) ?? 0) - (gridIdx.get(src.line) ?? 0) }
+					: { axis: "col", kind: "offset", delta: at.col - src.col };
+			drops.push({ ...at, inner: copying ? "" : values[i], src, op });
+		});
+	}
+	return drops;
+}
+
+/** The value the fill handle would drop in `dest`, for the label that follows
+ *  the pointer. Null where the drag would write nothing there. */
+export function dragFillPreview(
+	lines: string[],
+	seed: { line: number; col: number }[],
+	dest: { line: number; col: number }
+): string | null {
+	const drop = dragFillDrops(lines, seed, dest).find((d) => d.line === dest.line && d.col === dest.col);
+	if (!drop) return null;
+	const r = parseRow(lines[drop.src.line]);
+	const piece = r && drop.src.col < r.cellCount ? r.pieces[drop.src.col + 1] : "";
+	const s = parseCellContent(piece);
+	// a copied lane shows the formula it will carry, shifted to where it lands
+	if (s.formula) return shiftFormulaRefs(s.formula, drop.op);
+	if (looksLikeFormula(s.inner)) return shiftFormulaRefs(s.inner, drop.op);
+	if (s.calc) return s.inner;
+	return drop.inner;
+}
+
+/**
+ * Apply a drag of the fill handle. The whole drag is one edit, so it is one
+ * undo, however many cells it covered.
+ *
+ * What travels is the source cell's look, its number format and its borders;
+ * what stays behind is everything describing the destination's column rather
+ * than its contents (width, column rules, table flags), which is the same
+ * division Fill Down makes.
+ */
+export function planDragFill(
+	lines: string[],
+	seed: { line: number; col: number }[],
+	dest: { line: number; col: number }
+): (EditPlan & { filled: number }) | null {
+	const drops = dragFillDrops(lines, seed, dest);
+	if (!drops.length) return null;
+	const byLine = new Map<number, FillDrop[]>();
+	for (const d of drops) byLine.set(d.line, [...(byLine.get(d.line) ?? []), d]);
+
+	const edits: { line: number; text: string }[] = [];
+	let filled = 0;
+	for (const [line, ds] of byLine) {
+		const r = parseRow(lines[line]);
+		if (!r) continue;
+		for (const d of ds) {
+			if (d.col >= r.cellCount) continue;
+			const sr = parseRow(lines[d.src.line]);
+			if (!sr || d.src.col >= sr.cellCount) continue;
+			const s = parseCellContent(sr.pieces[d.src.col + 1]);
+			const keep = parseCellContent(r.pieces[d.col + 1]);
+			let inner = d.inner;
+			let formula: string | null = null;
+			if (s.formula) formula = shiftFormulaRefs(s.formula, d.op);
+			else if (looksLikeFormula(s.inner)) inner = shiftFormulaRefs(s.inner, d.op);
+			else if (s.calc) inner = s.inner;
+			const content = buildCellContent(
+				formula || s.calc ? s.inner : inner,
+				s.bg,
+				s.fg,
+				s.calc,
+				formula,
+				s.borders,
+				s.fmt,
+				s.hl,
+				keep.w,
+				keep.rule,
+				keep.tbl
+			);
+			const after = content ? ` ${content} ` : "   ";
+			if (after === r.pieces[d.col + 1]) continue;
+			r.pieces[d.col + 1] = after;
+			filled++;
+		}
+		const text = r.prefix + r.pieces.join("|");
+		if (text !== lines[line]) edits.push({ line, text });
+	}
+	if (!filled) return null;
+	const lastLine = drops[drops.length - 1].line;
+	return { edits, cursorLine: lastLine, cursorCh: cursorForCol(lines[lastLine], drops[drops.length - 1].col), filled };
 }
 
 export function planPrettify(lines: string[], target: CellTargetLoc): (EditPlan & { rows: number }) | null {

@@ -16,6 +16,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column
 - Live totals and Excel-style formulas: 41 functions including `VLOOKUP`, `INDEX`/`MATCH`, `IFERROR`, `SUMIF`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
 - References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
+- Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
 - Fill down and fill right over a selection, with `$B$2` anchoring to pin what shouldn't travel
 - A formula bar that completes function names and takes references by clicking cells, and Excel's error values (`#VALUE!` `#NAME?` `#REF!` `#N/A` `#DIV/0!`) so a broken formula says what broke
 - A selection bar whenever you drag-select cells: column alignment right there, plus Sum, Avg, Count and one-click AutoSum when the cells are numbers
@@ -74,6 +75,23 @@ The reference guides are the selection handles, the way a spreadsheet's column l
 - **Press the corner box**, above the row numbers and left of the letters, to take the whole table.
 - Whatever you take is an ordinary selection: colors, text styles, alignment, borders, number formats, Fill down/right, AutoSum and Clear values all act on every cell of it, and the selection bar shows Sum, Avg and Count for it. In Live Preview it is Obsidian's own table selection, so copy, cut and Delete work on it too.
 - The **column resize band wins over the letter it crosses**, exactly as those same pixels do in Excel: the few pixels either side of a column divider still resize, and the rest of the letter selects.
+
+### The fill handle
+
+The small square on the bottom-right corner of the selection. Drag it over the cells you want filled and a label follows the pointer reading the value that will land where it is, so you can see the series before you drop it.
+
+What lands depends on what you dragged from, the way it does in a spreadsheet:
+
+- **Dates** walk a day at a time, or a month at a time when the selection steps months. A run sitting on month ends stays on them, so Jan 31 goes to Feb 28 and on to Mar 31. The date style you wrote is the one written back, `8/4/2026` or `2026-08-04` or `Aug 4, 2026`.
+- **Numbers**: two or more set their own step, a lone one copies (a rate dragged down a column is the far more common drag). Currency symbols, thousands separators, decimal places, percent signs and accounting parentheses all survive: `$1,000.00` and `$2,000.00` fill to `$3,000.00`.
+- **Times** step by the interval between them, or an hour from a lone cell.
+- **Weekdays and month names** walk and wrap, keeping the abbreviation and the case you used. **Text carrying a number** increments the number, zero padding included, and the *last* number in the text is the one that moves.
+- **Formulas** are never extrapolated. They are copied with their references shifted to where they land, so `=C2-B2` dragged down becomes `=C3-B3` and `=C2*$B$1` keeps its rate. Live column sums copy the same way.
+- Anything with no series in it repeats, so a block of two colors fills as a stripe.
+
+Drag **up or left** and the series runs backwards. Select several columns and each fills its own series independently, so a Date column and an Amount column dragged together do not contaminate each other. The whole drag is **one edit**, so it is one undo however many cells it covered, and the source cell's colors, borders and number format travel with it.
+
+The fill writes into rows the table already has; it will not grow the table, so add rows first (right-click → *Insert row below*, or the panel's Data section) if you are filling past the end. Turn the handle off in Settings → **Fill handle**.
 
 ### Checkboxes, highlights & column widths
 
