@@ -75,6 +75,7 @@ import {
 	tableFromRows,
 	tableGrid,
 	gridRowOf,
+	blockTargets,
 	shiftFormulaRefs,
 	formulaErrorText,
 	FORMULA_FUNCTIONS,
@@ -826,6 +827,28 @@ eq(evalFormula("=B1", xg.rows, 3, 1), "Count", "B1 addresses the header cell");
 eq(evalFormula("=SUM(B2:B3)", xg.rows, 3, 1), 100, "data rows are numbered from 2");
 const xlp = planSetCellValue(XL.slice(), { line: 4, col: 1, expect: null }, "=SUM(B2:B3)")!;
 ok(xlp.edits[0].text.includes(">100</span>"), "a total row sums its Excel-numbered data rows");
+
+// --- blockTargets: a guide selection in document coordinates ---
+// the whole of column B, header included, in a table whose first line is 10
+const colB = blockTargets(10, { r1: 0, r2: 3, c1: 1, c2: 1 });
+eq(colB.length, 4, "a column of a 4-row grid selects 4 cells");
+eq(colB[0].line, 10, "grid row 0 is the header, on the table's own first line");
+eq(colB[1].line, 12, "the first data row clears the |---| divider");
+eq(colB[3].line, 14, "and the rest carry on one line each");
+ok(colB.every((t) => t.col === 1), "every cell of the block is in column B");
+const row3 = blockTargets(10, { r1: 2, r2: 2, c1: 0, c2: 2 });
+eq(row3.length, 3, "a row selects one cell per column");
+eq(row3.map((t) => t.col).join(""), "012", "left to right");
+ok(
+	row3.every((t) => t.line === 13),
+	"all on the one line"
+);
+// a drag runs in whichever direction the pointer went, so corners arrive either way
+eq(
+	JSON.stringify(blockTargets(0, { r1: 3, r2: 1, c1: 2, c2: 0 })),
+	JSON.stringify(blockTargets(0, { r1: 1, r2: 3, c1: 0, c2: 2 })),
+	"a block dragged up and left is the block dragged down and right"
+);
 
 // a header cell can hold a formula, and it computes and is referable like any
 // other cell now that it has an address

@@ -2038,6 +2038,28 @@ export function gridRowOf(g: Grid, line: number): number {
 	return g.lineNos.indexOf(line);
 }
 
+/** A rectangular block of one table in grid coordinates; row 0 is the header.
+ *  Corners come in whatever order the gesture touched them. */
+export type CellBlock = { r1: number; r2: number; c1: number; c2: number };
+
+/**
+ * Doc coordinates for every cell of a block, given the table's first line.
+ *
+ * Row 0 is the header and sits on that first line; body rows clear the |---|
+ * divider, so grid row r lands on start + r + 1. The click paths all do that
+ * sum, and it lives here so one tested copy answers for all of them.
+ */
+export function blockTargets(start: number, b: CellBlock): { line: number; col: number; expect: null }[] {
+	const out: { line: number; col: number; expect: null }[] = [];
+	const c1 = Math.min(b.c1, b.c2);
+	const c2 = Math.max(b.c1, b.c2);
+	for (let r = Math.min(b.r1, b.r2); r <= Math.max(b.r1, b.r2); r++) {
+		const line = start + (r === 0 ? 0 : r + 1);
+		for (let c = c1; c <= c2; c++) out.push({ line, col: c, expect: null });
+	}
+	return out;
+}
+
 function colIndexOf(letters: string): number {
 	let n = 0;
 	for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);

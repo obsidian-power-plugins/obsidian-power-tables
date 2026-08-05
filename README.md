@@ -22,7 +22,7 @@ the variance column. Everything on the left is still plain Markdown in the file.
 - Sorting that understands numbers, currency, and dates; row and column moves; insert, delete, duplicate
 - Number, currency, percent, date, and time formats, including sticky column/row formats
 - Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
-- CSV/Excel import and export, table prettifier, Excel-style cell reference guides
+- CSV/Excel import and export, table prettifier, Excel-style cell reference guides that select the column or row they label
 - Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
 
 New here? Run the command **Insert demo table** to see most of this working in ten seconds.
@@ -64,6 +64,16 @@ The table bar's two split buttons stand in for a row of them, the way Excel cons
    - **No color** clears that property; **More colors…** opens a full color picker (click it again to close).
    - **Clear table** removes every color from the table under the cursor / last clicked cell.
 4. **Borders** (the ▢ button in the Text row) work like Excel's menu at the Apply-to selection: bottom/top/left/right edge, **All borders**, **Outside** or **Thick outside** borders around the cell, row, or column, and **No border** to clear. Excel's stacked presets are there too: thick bottom, double bottom, and top-and-bottom in thin, thick or double. **Draw Borders** arms a pen: *Draw border* lays an edge on whichever side of a cell you drag nearest, *Draw border grid* boxes every cell you cross, *Erase border* strips them, and the whole drag commits as one edit rather than one per cell. *Line style* picks thin, thick, double, dashed or dotted; *Line color* picks from seven named colors (names rather than arbitrary hex, because the edges are painted by CSS off the stored attribute and a fixed set keeps the note portable). Esc, or the same menu entry again, puts the pen down. Edges are stored in the cell's wrapper (`data-b="tblr"`, uppercase = thick, `=` ahead of a letter for double, so `t=b` is a thin top over a double bottom) and painted by the plugin's CSS, so the table stays plain Markdown and degrades cleanly without the plugin.
+
+### Selecting columns and rows
+
+The reference guides are the selection handles, the way a spreadsheet's column letters and row numbers are:
+
+- **Press a column letter** to select that whole column, header included, or a **row number** to select that whole row.
+- **Drag along the letters or the numbers** to take a span of columns or rows. **Shift-press** a second guide to extend the last one instead.
+- **Press the corner box**, above the row numbers and left of the letters, to take the whole table.
+- Whatever you take is an ordinary selection: colors, text styles, alignment, borders, number formats, Fill down/right, AutoSum and Clear values all act on every cell of it, and the selection bar shows Sum, Avg and Count for it. In Live Preview it is Obsidian's own table selection, so copy, cut and Delete work on it too.
+- The **column resize band wins over the letter it crosses**, exactly as those same pixels do in Excel: the few pixels either side of a column divider still resize, and the rest of the letter selects.
 
 ### Checkboxes, highlights & column widths
 
@@ -150,7 +160,7 @@ Everything renders and edits on phones and tablets; notes colored on desktop loo
 ## Settings
 
 - **Auto-open sidebar**: reveal the Power Tables pane the first time you edit inside a table each session.
-- **Cell reference guides**: Excel-style column letters above and row numbers beside every table, with the header as row 1 and the first data row as 2, exactly as Excel numbers them (on by default).
+- **Cell reference guides**: Excel-style column letters above and row numbers beside every table, with the header as row 1 and the first data row as 2, exactly as Excel numbers them (on by default). They select, too: see [Selecting columns and rows](#selecting-columns-and-rows).
 - **Hide cell markup while editing**: collapse the `<span>` wrapper and whole-value bold/italic/strike markers in Live Preview, keeping the cell rendered with its colors (on by default).
 - **Striped rows** / **Compact tables**: global table appearance toggles.
 - **Header fill**: paint every table's header row with one color, chosen via the swatch next to the toggle (on by default, soft blue). It's pure styling (no files change) and per-cell header colors you set explicitly still win over it. **Header fill in dark mode** keeps a separate color for dark themes.

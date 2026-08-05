@@ -25,11 +25,13 @@ import {
 	BorderAction,
 	BORDER_COLORS,
 	BorderColor,
+	CellBlock,
 	Edge,
 	EdgeWeight,
 	CalcFn,
 	CalcSpec,
 	ColAlign,
+	blockTargets,
 	DATE_PATTERNS,
 	DateParts,
 	EditPlan,
@@ -132,6 +134,29 @@ type CellTarget = {
 
 /** A conditional color rule as stored on a column's header cell. */
 type Rule = { op: RuleOp; value: string; bg: string | null; fg: string | null };
+
+/** Which rail a reference guide belongs to: a column letter, a row number, or
+ *  the corner box that takes the whole table. */
+type GuideKind = "col" | "row" | "all";
+
+/**
+ * The slice of Obsidian's Live Preview table object this plugin drives.
+ *
+ * Undocumented, so every member is optional at the call site and checked before
+ * use; anything missing sends the selection down the plugin's own path instead.
+ * Selecting through Obsidian is worth the feature detection: the block then
+ * highlights the way a drag-selection does, and the editor's own copy, cut and
+ * delete act on it.
+ */
+type WidgetTable = {
+	tableEl?: HTMLElement | null;
+	rows?: unknown[];
+	alignments?: unknown[];
+	selectedCells?: unknown[];
+	getCellAt?: (row: number, col: number) => unknown;
+	selectCells?: (anchor: unknown, head: unknown) => void;
+	receiveCellFocus?: (row: number, col: number) => void;
+};
 
 const VIEW_TYPE_PT = "power-tables-view";
 
@@ -447,6 +472,9 @@ export default class PowerTablesPlugin extends Plugin {
 	/** The armed border-drawing tool, or null. */
 	private pen: { tool: "border" | "grid" | "erase" } | null = null;
 	private stickySel: ReturnType<PowerTablesPlugin["readWidgetSelection"]> = null;
+	/** Where the guide gesture started, so a drag or a Shift-click extends from
+	 *  the first guide pressed rather than from the one under the pointer. */
+	private guideAnchor: { table: HTMLTableElement; kind: GuideKind; index: number } | null = null;
 	private autoRevealed = false;
 	private resizing: { th: HTMLElement; startX: number; startW: number; moved: boolean } | null = null;
 	private edgeHover: HTMLElement | null = null;
@@ -776,6 +804,11 @@ export default class PowerTablesPlugin extends Plugin {
 			},
 			{ capture: true }
 		);
+		// Column letters and row numbers select what they label. This is
+		// registered after the handler above on purpose: that one clears the
+		// remembered selection for any press in a table, guides included, and
+		// this one then puts the new selection in its place.
+		this.registerDomEvent(document, "pointerdown", (evt) => this.onGuideDown(evt), { capture: true });
 		this.registerDomEvent(document, "focusin", (evt) => {
 			if (evt.target instanceof Element && evt.target.closest<HTMLElement>(".cm-table-widget, td, th")) this.updatePanels();
 		});
@@ -923,6 +956,298 @@ export default class PowerTablesPlugin extends Plugin {
 		this.applyTableFlags();
 		this.renderCheckboxes();
 		this.renderFilterRows();
+		this.renderGuides();
+	}
+
+	/* ---------------- reference guides (column letters + row numbers) ---------------- */
+
+	/** Whether this table draws guides: its own override first, then the global setting. */
+	private guidesOn(tbl: HTMLTableElement): boolean {
+		if (tbl.hasClass("ptb-t-guides")) return true;
+		if (tbl.hasClass("ptb-t-noguides")) return false;
+		return this.settings.cellRefs;
+	}
+
+	/** A table's rows in grid order, header first. The injected filter row is a
+	 *  read-time affordance, not a row of the table, so it never counts. */
+	private guideRows(tbl: HTMLTableElement): HTMLTableRowElement[] {
+		return Array.from(tbl.rows).filter((tr) => !tr.hasClass("ptb-filter"));
+	}
+
+	/**
+	 * Draw the guides as real elements rather than CSS counters.
+	 *
+	 * They used to be ::before content, which cannot be clicked: the press landed
+	 * on the header cell underneath and started editing it. As elements they are
+	 * their own click targets, so a letter selects its column and a number its
+	 * row, and a drag across them takes the span, the way a spreadsheet does.
+	 * Their text rides on a data attribute drawn by CSS, so the cell's
+	 * textContent stays exactly the cell's own text: the click paths match a
+	 * cell's text against the note to be sure they are editing the line they
+	 * think they are, and a letter mixed into it would fail every one of them.
+	 */
+	private renderGuides() {
+		document.body
+			.querySelectorAll<HTMLTableElement>(":is(.markdown-rendered, .cm-table-widget) table")
+			.forEach((tbl) => {
+				const on = this.guidesOn(tbl);
+				tbl.toggleClass("ptb-guided", on);
+				if (!on) {
+					tbl.querySelectorAll(".ptb-guide").forEach((g) => g.remove());
+					return;
+				}
+				const rows = this.guideRows(tbl);
+				rows.forEach((tr, r) => {
+					const first = tr.cells[0];
+					if (!first) return;
+					this.ensureGuide(first, "row", r, String(r + 1));
+					if (r > 0) return;
+					Array.from(tr.cells).forEach((c, i) => this.ensureGuide(c, "col", i, colLetter(i)));
+					this.ensureGuide(first, "all", 0, "");
+				});
+				// A guide belongs to the cell it labels. Anything left behind by a
+				// column that moved, or by a first column that was deleted, is
+				// removed rather than left labelling the wrong cell.
+				tbl.querySelectorAll<HTMLElement>(".ptb-guide").forEach((g) => {
+					const cell = g.closest<HTMLTableCellElement>("td, th");
+					const inHeader = !!cell && cell.closest("tr") === rows[0];
+					const keep = g.hasClass("ptb-gcol")
+						? inHeader
+						: cell?.cellIndex === 0 && (g.hasClass("ptb-grow") || inHeader);
+					if (!keep) g.remove();
+				});
+			});
+	}
+
+	/** Put one guide in its cell, or update the label it already has. Column
+	 *  letters go first in the cell so they sit above its text; the other two are
+	 *  positioned out of flow, so where they land in the cell doesn't matter. */
+	private ensureGuide(cell: HTMLTableCellElement, kind: GuideKind, index: number, label: string) {
+		const cls = kind === "col" ? "ptb-gcol" : kind === "row" ? "ptb-grow" : "ptb-gall";
+		let el = cell.querySelector<HTMLElement>(`:scope > .${cls}`);
+		if (!el) {
+			el = createDiv({ cls: `ptb-guide ${cls}` });
+			if (kind === "col") cell.prepend(el);
+			else cell.append(el);
+		}
+		if (el.dataset.l !== label) el.dataset.l = label;
+		if (el.dataset.i !== String(index)) el.dataset.i = String(index);
+		const tip =
+			kind === "all"
+				? "Select the whole table"
+				: `Select ${kind === "col" ? "column" : "row"} ${label}, or drag to take more`;
+		if (el.title !== tip) el.title = tip;
+	}
+
+	/**
+	 * A press on a guide takes the whole column, the whole row, or, from the
+	 * corner box, the whole table, and keeps taking more while the pointer drags
+	 * along the rail. Shift extends the block the last press started instead of
+	 * beginning a new one. All three are what the same press does in Excel.
+	 */
+	private onGuideDown(evt: PointerEvent) {
+		if (evt.button !== 0 || !(evt.target instanceof Element)) return;
+		// an armed drawing tool draws everywhere, and the column-resize band wins
+		// over the letter it crosses, exactly as the same pixels do in Excel
+		if (this.pen || this.headerEdgeAt(evt)) return;
+		const g = evt.target.closest<HTMLElement>(".ptb-guide");
+		const table = g?.closest<HTMLTableElement>("table");
+		if (!g || !table) return;
+		// The press must not reach the cell underneath: it would put the caret in
+		// it, and in Live Preview that rebuilds the cell mid-gesture.
+		evt.preventDefault();
+		evt.stopPropagation();
+		// Preventing the default press also stops Obsidian's own switch to the
+		// pane that was clicked, and everything downstream reads the active one,
+		// so make the pane holding this table active first.
+		const view = this.viewForEl(table);
+		if (view && this.app.workspace.getActiveViewOfType(MarkdownView) !== view) {
+			this.app.workspace.setActiveLeaf(view.leaf, { focus: true });
+		}
+		const kind: GuideKind = g.hasClass("ptb-gall") ? "all" : g.hasClass("ptb-gcol") ? "col" : "row";
+		const index = Number(g.dataset.i ?? 0);
+		const prev = this.guideAnchor;
+		const anchor = evt.shiftKey && prev && prev.table === table && prev.kind === kind ? prev.index : index;
+		this.guideAnchor = { table, kind, index: anchor };
+		this.selectGuideBlock(table, kind, anchor, index, true);
+		if (kind === "all") return;
+		const rail = kind === "col" ? ".ptb-gcol" : ".ptb-grow";
+		const move = (e: PointerEvent) => {
+			const over = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>(rail);
+			// The drag stays in the table it started in, and off the rail it holds
+			// what it has, so wandering out of a thin strip costs nothing.
+			if (!over || over.closest("table") !== table) return;
+			this.selectGuideBlock(table, kind, anchor, Number(over.dataset.i ?? 0), false);
+		};
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", up);
+			this.updatePanels();
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", up);
+	}
+
+	/** Select the block a pair of guide indices covers. */
+	private selectGuideBlock(table: HTMLTableElement, kind: GuideKind, from: number, to: number, focus: boolean) {
+		const rows = this.guideRows(table);
+		const cols = rows[0]?.cells.length ?? 0;
+		if (!rows.length || !cols) return;
+		const lo = Math.max(0, Math.min(from, to));
+		const hi = Math.max(from, to);
+		const block: CellBlock =
+			kind === "col"
+				? { r1: 0, r2: rows.length - 1, c1: lo, c2: Math.min(hi, cols - 1) }
+				: kind === "row"
+					? { r1: lo, r2: Math.min(hi, rows.length - 1), c1: 0, c2: cols - 1 }
+					: { r1: 0, r2: rows.length - 1, c1: 0, c2: cols - 1 };
+		this.clearGuidePaint();
+		this.stickySel = null;
+		// Obsidian's own selection first: the block then paints the way a drag
+		// through the cells paints, and the editor's copy, cut and delete act on it.
+		if (!this.selectNative(table, block, focus)) {
+			const own = this.docBlockTargets(table, block);
+			if (own) {
+				// the plugin's remembered selection is exactly this shape, so a
+				// guide selection needs no second one: everything already reads it
+				this.stickySel = own;
+				this.paintBlock(table, block);
+			} else {
+				// nothing here can be selected (no editor open on the file), so
+				// fall back to targeting the block's first cell rather than nothing
+				const cell = rows[block.r1]?.cells[block.c1];
+				const t = cell ? this.targetFromCell(cell) : null;
+				if (t) this.clickTarget = t;
+			}
+		}
+		this.markGuides(table, block, kind);
+		// mid-drag the guides and the block itself already show what is being
+		// taken; the panel and the stats chip catch up on pointerup, the same as
+		// they do for a drag through the cells
+		if (focus) this.updatePanels();
+	}
+
+	/**
+	 * Hand the block to Obsidian's own table selection.
+	 *
+	 * Worth doing rather than only painting one ourselves: the block then reads
+	 * as a selection to the editor, so copy, cut and Delete act on it, and the
+	 * plugin's existing selection reader picks it up with no second path to keep
+	 * in step. Every internal is checked before it is called, and false here
+	 * means the plugin selects the block its own way instead.
+	 */
+	private selectNative(tableEl: HTMLTableElement, b: CellBlock, focus: boolean): boolean {
+		try {
+			const t = this.acquireWidgetTable(tableEl);
+			if (!t?.getCellAt || !t.selectCells) return false;
+			// focus first and read the cells after: focusing rebuilds the one it lands on
+			if (focus) t.receiveCellFocus?.(b.r1, b.c1);
+			const from = t.getCellAt(b.r1, b.c1);
+			const to = t.getCellAt(b.r2, b.c2);
+			if (!from || !to || from === to) return false;
+			t.selectCells(from, to);
+			return (t.selectedCells?.length ?? 0) > 1;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Obsidian's table object for a rendered table, if it will part with one.
+	 *
+	 * It exposes the object only through the cell being edited, so when the press
+	 * did not come from inside this table the cursor is placed in it first. That
+	 * is no detour: selecting a column makes its first cell the active one
+	 * anyway, which is what Obsidian's own column handle does.
+	 */
+	private acquireWidgetTable(tableEl: HTMLTableElement): WidgetTable | null {
+		const view = this.viewForEl(tableEl);
+		if (!view?.file || view.getMode() === "preview") return null;
+		const held = (): WidgetTable | null => {
+			const em = (view as unknown as { editMode?: unknown }).editMode ?? view.editor;
+			const t = (em as { tableCell?: { table?: WidgetTable } } | null)?.tableCell?.table;
+			return t && t.tableEl === tableEl ? t : null;
+		};
+		const have = held();
+		if (have) return have;
+		const cm = (view.editor as unknown as { cm?: EditorView }).cm;
+		if (!cm || !cm.dom.contains(tableEl)) return null;
+		const start = cm.state.doc.lineAt(cm.posAtDOM(tableEl)).number - 1;
+		// ch 2 is inside the first cell of any row line, which always opens with "|"
+		view.editor.setCursor({ line: start, ch: 2 });
+		return held();
+	}
+
+	/** The note view a rendered table sits in, whether or not it is the active
+	 *  one: a press has to act on the pane that holds the table. */
+	private viewForEl(el: HTMLElement): MarkdownView | null {
+		let found: MarkdownView | null = null;
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			const v = leaf.view;
+			if (!found && v instanceof MarkdownView && v.containerEl.contains(el)) found = v;
+		});
+		return found;
+	}
+
+	/** A block in document coordinates, or null when nothing can act on it: no
+	 *  open editor for the file, or a table whose place in it can't be read. */
+	private docBlockTargets(table: HTMLTableElement, b: CellBlock) {
+		// Reading view carries the post-processor's stamp; Live Preview asks
+		// CodeMirror, through the pane holding the table rather than the active one
+		const stamped = table.getAttribute("data-ptb-start");
+		const path = table.getAttribute("data-ptb-path");
+		let start: number;
+		let file: string;
+		if (stamped != null && path) {
+			start = parseInt(stamped, 10);
+			file = path;
+		} else {
+			const view = this.viewForEl(table);
+			const cm = (view?.editor as unknown as { cm?: EditorView } | undefined)?.cm;
+			if (!view?.file || !cm || !cm.dom.contains(table)) return null;
+			try {
+				start = cm.state.doc.lineAt(cm.posAtDOM(table)).number - 1;
+			} catch {
+				return null;
+			}
+			file = view.file.path;
+		}
+		const editor = this.editorForPath(file);
+		if (!editor || Number.isNaN(start)) return null;
+		return { path: file, editor, targets: blockTargets(start, b) };
+	}
+
+	/** Shade a block the plugin selected itself. Obsidian paints its own
+	 *  selection, so this is only for the path where it would not take one. */
+	private paintBlock(table: HTMLTableElement, b: CellBlock) {
+		const rows = this.guideRows(table);
+		for (let r = b.r1; r <= b.r2; r++) {
+			for (let c = b.c1; c <= b.c2; c++) rows[r]?.cells[c]?.addClass("ptb-sel");
+		}
+	}
+
+	/** Light the guides a block spans, the way a spreadsheet lights the letters
+	 *  and numbers of the selected range: the rail that was pressed solid, the
+	 *  one crossing it only tinted. */
+	private markGuides(table: HTMLTableElement, b: CellBlock, kind: GuideKind) {
+		table.querySelectorAll<HTMLElement>(".ptb-gcol").forEach((g) => {
+			const on = Number(g.dataset.i) >= b.c1 && Number(g.dataset.i) <= b.c2;
+			g.toggleClass("is-active", on);
+			g.toggleClass("is-lead", on && kind !== "row");
+		});
+		table.querySelectorAll<HTMLElement>(".ptb-grow").forEach((g) => {
+			const on = Number(g.dataset.i) >= b.r1 && Number(g.dataset.i) <= b.r2;
+			g.toggleClass("is-active", on);
+			g.toggleClass("is-lead", on && kind !== "col");
+		});
+	}
+
+	/** Take back everything a guide selection drew. */
+	private clearGuidePaint() {
+		document.body.querySelectorAll(".ptb-sel").forEach((c) => c.removeClass("ptb-sel"));
+		document.body.querySelectorAll(".ptb-guide.is-active").forEach((g) => g.removeClasses(["is-active", "is-lead"]));
 	}
 
 	/** Apply one table's appearance overrides (data-tbl on a header-cell span)
@@ -1521,6 +1846,7 @@ export default class PowerTablesPlugin extends Plugin {
 	/** Forget the remembered selection: a new gesture is starting one. */
 	private dropStickySelection() {
 		this.stickySel = null;
+		this.clearGuidePaint();
 	}
 
 	/** Work has moved out of the table. Both remembered signals go, so nothing
@@ -1528,6 +1854,8 @@ export default class PowerTablesPlugin extends Plugin {
 	private leaveTableContext() {
 		this.stickySel = null;
 		this.clickTarget = null;
+		this.guideAnchor = null;
+		this.clearGuidePaint();
 	}
 
 	/** Whether the live cursor is on a table row, ignoring anything remembered.
@@ -2469,7 +2797,7 @@ export default class PowerTablesPlugin extends Plugin {
 			(dark && this.settings.headerFillDark) || this.settings.headerFill
 		);
 		document.body.toggleClass("ptb-sticky", this.settings.stickyHeaders);
-		this.queueScan(); // the filter row is DOM-injected, not CSS-driven, a rescan applies the toggle
+		this.queueScan(); // the filter row and the guides are DOM-injected, not CSS-driven; a rescan applies the toggle
 	}
 
 	/** One-click paste: append clipboard rows (Excel/Sheets tabs or CSV) to the targeted table. */
@@ -3869,7 +4197,7 @@ class PanelUI {
 			b.addEventListener("click", () => void this.plugin.toggleTableFlag(f));
 			this.tflagBtns.push([f, b]);
 		};
-		tflag("guides", "Guides", "Column letters and row numbers on this table (overrides the global setting)");
+		tflag("guides", "Guides", "Column letters and row numbers on this table, which also select what they label (overrides the global setting)");
 		tflag("striped", "Striped", "Tint alternating rows on this table (overrides the global setting)");
 		tflag("compact", "Compact", "Reduce cell padding on this table (overrides the global setting)");
 		tflag("headerfill", "Header", "Fill this table's header row (overrides the global setting)");
@@ -5219,8 +5547,8 @@ class PowerTablesSettingTab extends PluginSettingTab {
 
 		appearance.push({
 			name: "Cell reference guides",
-			desc: "Show Excel-style column letters above and row numbers beside every table. The panel's This-table buttons override it per table.",
-			help: "Paints column letters (A, B, C) above and row numbers beside each table so cell references in formulas like =SUM(B2:B4) are easy to read and write. The header is row 1 and the first data row is 2, the same as Excel. Purely visual; nothing is stored in the note.",
+			desc: "Show Excel-style column letters above and row numbers beside every table, and select by pressing them. The panel's This-table buttons override it per table.",
+			help: "Paints column letters (A, B, C) above and row numbers beside each table so cell references in formulas like =SUM(B2:B4) are easy to read and write. The header is row 1 and the first data row is 2, the same as Excel. They also select: press a letter to take its column, a number to take its row, the corner box to take the whole table, and drag along either rail, or Shift-press, to take a span. Nothing is stored in the note.",
 			build: (s) => {
 				s.addToggle((t) =>
 					t.setValue(this.plugin.settings.cellRefs).onChange(async (v) => {

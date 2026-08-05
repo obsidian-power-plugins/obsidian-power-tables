@@ -941,73 +941,134 @@ th > span.ptb-fill:not([data-lifted]) {
 		var(--table-cell-horizontal-padding, var(--size-4-2, 8px));
 }
 
-/* ---------- cell reference guides (column letters + row numbers) ---------- */
+/* ---------- cell reference guides (column letters + row numbers) ----------
+   Real elements rather than ::before counters, because a guide is a control:
+   pressing a letter selects its column, a number its row, and the corner box
+   the whole table, with a drag along the rail taking the span. Their text is
+   drawn from a data attribute, so it never joins the cell's textContent, which
+   the click paths match against the note before they edit a line. Which tables
+   get them is decided in the DOM sweep, which paints .ptb-guided. */
 
-body.ptb-cellrefs .markdown-rendered table:not(.ptb-t-noguides),
-body.ptb-cellrefs .cm-table-widget table:not(.ptb-t-noguides),
-.markdown-rendered table.ptb-t-guides,
-.cm-table-widget table.ptb-t-guides {
-	counter-reset: ptbcol ptbrow;
+.markdown-rendered table.ptb-guided,
+.cm-table-widget table.ptb-guided {
 	margin-left: 26px;
 }
 
-/* letters: only the table's real first row, the thead row, or the first
-   tbody row when there is no thead (never both) */
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > * {
-	counter-increment: ptbcol;
-}
-
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *::before,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *::before {
-	content: counter(ptbcol, upper-alpha);
-	display: block;
+/* The rails are chrome, not table, so they take a spreadsheet's flat gray and
+   are divided from each other and from the grid by a line one step further
+   along. Both come from the theme's own base ramp, which inverts with the
+   theme, so this reads as a gray header in light mode and a raised one in dark
+   rather than being pinned to a light-mode hex. The named fallbacks cover a
+   theme that publishes no ramp. */
+.ptb-guide {
+	--ptb-guide-h: 12px;
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	cursor: pointer;
 	font-size: 9px;
 	font-weight: 500;
-	line-height: 1.1;
-	text-align: center;
-	color: var(--text-faint);
+	line-height: 1;
+	color: var(--text-muted);
+	background-color: var(--color-base-30, var(--background-secondary));
+	border-right: 1px solid var(--background-modifier-border-hover, var(--background-modifier-border));
+	border-bottom: 1px solid var(--background-modifier-border-hover, var(--background-modifier-border));
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+/* the letter sits in the flow at the top of the header cell, so it is exactly
+   as wide as the column it labels however that column is later resized */
+.ptb-gcol {
+	height: var(--ptb-guide-h);
+	justify-content: center;
 	letter-spacing: 0.04em;
 }
 
-/* numbers: the header row is 1 and the body carries on from there, so the
-   gutter reads the way Excel reads and matches what a formula addresses. One
-   selector covers both shapes: with a thead the header is its first row and the
-   body follows; without one, every row of the leading tbody counts, header
-   included. */
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, thead ~ tbody > tr, tbody:first-child > tr),
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, thead ~ tbody > tr, tbody:first-child > tr) {
-	counter-increment: ptbrow;
+/* The number sits in the margin the table leaves for it, beside its row.
+   Live Preview puts Obsidian's own row grip in that same margin, invisible
+   until hovered; the z-index puts the number in front of it, so this strip
+   selects the row the way a spreadsheet's does rather than offering to move
+   it. The grip is still there past the number's right edge, and every move is
+   in the right-click menu regardless. */
+.ptb-grow {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -26px;
+	width: 26px;
+	z-index: 3;
+	justify-content: flex-end;
+	padding-right: 5px;
 }
 
-/* body rows anchor the number on the cell; the header row anchors it on the tr
-   instead, because a sticky header th must keep `position: sticky` and these
-   selectors would outspecify that rule. Both resolve to the same left edge, and
-   a sticky th is its own containing block anyway, so the number rides along. */
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child,
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child),
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) {
+/* row 1 is the header row, whose cell carries the letter strip above it */
+.ptb-grow[data-i="0"] {
+	top: var(--ptb-guide-h);
+}
+
+.ptb-gall {
+	position: absolute;
+	top: 0;
+	left: -26px;
+	width: 26px;
+	height: var(--ptb-guide-h);
+	z-index: 3;
+}
+
+/* fingers need more than a 12px strip to land on */
+body.is-mobile .ptb-guide {
+	--ptb-guide-h: 18px;
+}
+
+.ptb-gcol::before,
+.ptb-grow::before {
+	content: attr(data-l);
+}
+
+/* one more step along the same ramp, so a hovered guide darkens in light mode
+   and lightens in dark, and the state rules below still outrank it */
+.ptb-guide:hover {
+	color: var(--text-normal);
+	background-color: var(--color-base-35, var(--background-modifier-border));
+}
+
+/* The rail crossed by a selection is washed with the accent, the rail it was
+   taken from goes solid: the difference a spreadsheet draws too. The wash is an
+   image rather than a color so it composites over the gray instead of replacing
+   it, which is what keeps it reading as the same rail. */
+.ptb-guide.is-active {
+	color: var(--text-normal);
+	background-image: linear-gradient(
+		var(--background-modifier-active-hover),
+		var(--background-modifier-active-hover)
+	);
+}
+
+.ptb-guide.is-lead {
+	color: var(--text-on-accent);
+	background-color: var(--interactive-accent);
+	background-image: none;
+}
+
+/* The number is positioned against the cell it sits in, and against the row if
+   a theme leaves that cell static. A sticky header th outspecifies the cell
+   rule and keeps `position: sticky`, which is itself a containing block, so the
+   number rides along there too. All three resolve to the same left edge. */
+:is(.markdown-rendered, .cm-table-widget) table.ptb-guided tr:first-child,
+:is(.markdown-rendered, .cm-table-widget) table.ptb-guided tr > *:first-child {
 	position: relative;
 }
 
-/* the header's number rides on ::after because ::before there is already its
-   column letter */
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead ~ tbody > tr, tbody:first-child > tr:not(:first-child)) > *:first-child::before,
-body.ptb-cellrefs :is(.markdown-rendered, .cm-table-widget) table:not(.ptb-t-noguides) :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *:first-child::after,
-:is(.markdown-rendered, .cm-table-widget) table.ptb-t-guides :is(thead > tr:first-child, tbody:first-child > tr:first-child) > *:first-child::after {
-	content: counter(ptbrow);
-	position: absolute;
-	left: -24px;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 18px;
-	text-align: right;
-	font-size: 9px;
-	font-weight: 500;
-	color: var(--text-faint);
-	pointer-events: none;
+/* Cells of a selection the plugin made itself, on the path where Obsidian's own
+   table selection could not be driven. Painted as an image so a cell's own fill
+   still shows through underneath instead of being replaced by the tint. Two
+   layers: the selection color a theme sets, over a floor that keeps the block
+   visible where that color is deliberately transparent. */
+.ptb-sel {
+	background-image:
+		linear-gradient(var(--text-selection), var(--text-selection)),
+		linear-gradient(var(--background-modifier-active-hover), var(--background-modifier-active-hover));
 }
 
 /* ---------- cell borders ----------
