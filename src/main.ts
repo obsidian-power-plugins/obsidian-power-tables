@@ -73,6 +73,7 @@ import {
 	planPasteCells,
 	planSetColumnFilter,
 	planClearFilters,
+	edgeInDirection,
 	parseFilterTag,
 	filterHit,
 	fltSafe,
@@ -541,6 +542,10 @@ export default class PowerTablesPlugin extends Plugin {
 	private clipText = "";
 	/** The open AutoFilter dropdown, if any. Only ever one. */
 	private filterMenu: HTMLElement | null = null;
+	/** Where a keyboard range selection started. Obsidian's selectedCells is a
+	 *  set and cannot say which corner was the anchor, so the corner the arrows
+	 *  are pivoting around is remembered here. */
+	private keyAnchor: { table: HTMLTableElement; row: number; col: number } | null = null;
 	fmtModal: FormatCellsModal | null = null;
 	private hiderView = buildTagHider(this);
 	private hiderExtension = [hiderInstalled.of(true), this.hiderView];
@@ -930,6 +935,15 @@ export default class PowerTablesPlugin extends Plugin {
 				evt.preventDefault();
 				evt.stopPropagation();
 				this.closeFilterMenu();
+				return;
+			}
+			if (this.filterMenu) return;
+			// Excel's selection keys. onTableKeys answers false for anything it
+			// does not claim, and the press goes on to Obsidian untouched.
+			if (this.onTableKeys(evt)) {
+				evt.preventDefault();
+				evt.stopPropagation();
+				this.updatePanels();
 			}
 		}, { capture: true });
 		this.registerDomEvent(document, "keyup", (evt) => {
@@ -1622,6 +1636,217 @@ export default class PowerTablesPlugin extends Plugin {
 			}
 			row.toggleClass("ptb-fhidden", hide);
 		}
+	}
+
+	/* ---------------- keyboard range selection ---------------- */
+
+	/** The cell the cursor is in, as the table element and its grid coordinates.
+	 *  Live Preview only: Reading view has no cursor to extend from. */
+	private focusedWidgetCell(): { table: HTMLTableElement; row: number; col: number } | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view || view.getMode() === "preview") return null;
+		const em = (view as unknown as { editMode?: unknown }).editMode ?? view.editor;
+		const tc = (
+			em as { tableCell?: { table?: WidgetTable; cell?: { row?: number; col?: number } } } | null
+		)?.tableCell;
+		const table = tc?.table?.tableEl;
+		const cell = tc?.cell;
+		if (!(table instanceof HTMLTableElement) || !cell || typeof cell.row !== "number" || typeof cell.col !== "number") {
+			return null;
+		}
+		return { table, row: cell.row, col: cell.col };
+	}
+
+	/**
+	 * Whether the caret has run out of text in the direction it is being pushed.
+	 *
+	 * This is what lets Shift+Left/Right mean two things without a mode. Inside a
+	 * cell's text it selects text, which is what it does everywhere else in
+	 * Obsidian and what people are entitled to expect; at the end of the text
+	 * there is nothing left to select, so the same key starts taking cells, which
+	 * is what it does in Excel. An empty cell is at both ends at once, so a fresh
+	 * table behaves like a grid straight away.
+	 */
+	private caretSpent(back: boolean): boolean {
+		const sel = window.getSelection();
+		if (!sel || !sel.rangeCount) return true;
+		if (!sel.isCollapsed) return false; // text is selected: that gesture is already under way
+		const range = sel.getRangeAt(0);
+		const host = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)
+			?.closest<HTMLElement>(".cm-content, td, th");
+		if (!host) return true;
+		const pre = document.createRange();
+		pre.selectNodeContents(host);
+		pre.setEnd(range.startContainer, range.startOffset);
+		const before = pre.toString().length;
+		return back ? before === 0 : before >= (host.textContent ?? "").length;
+	}
+
+	/**
+	 * Excel's selection keys, for the table the cursor is in.
+	 *
+	 * Shift+Up/Down always take cells: a table cell holds one line, so those keys
+	 * have no text meaning to take away. Shift+Left/Right defer to the text until
+	 * the caret runs out of it, and stop deferring entirely once a block is
+	 * selected, because then there is no single caret left to be considerate of.
+	 */
+	private onTableKeys(evt: KeyboardEvent): boolean {
+		const at = this.focusedWidgetCell();
+		if (!at) return false;
+		const rows = this.guideRows(at.table);
+		const cols = rows[0]?.cells.length ?? 0;
+		if (!rows.length || !cols) return false;
+		const mod = evt.ctrlKey || evt.metaKey;
+		const last = rows.length - 1;
+
+		// Ctrl+A takes the table, then gets out of the way: pressing it again with
+		// the whole table already taken is how you reach "select the note".
+		if (mod && !evt.shiftKey && evt.key.toLowerCase() === "a") {
+			const live = this.readWidgetSelection();
+			if (live && live.targets.length >= rows.length * cols) return false;
+			this.keyAnchor = { table: at.table, row: 0, col: 0 };
+			return this.selectNative(at.table, { r1: 0, c1: 0, r2: last, c2: cols - 1 }, false);
+		}
+		// Ctrl+Space takes the column, Shift+Space the row, both together the
+		// whole table, as in Excel. Plain Shift+Space has to defer to the text
+		// first: holding Shift through the space of "Hello World" is a common
+		// enough slip that stealing it would be worse than the key is worth.
+		if (evt.key === " " && (mod || evt.shiftKey)) {
+			if (!mod && !this.readWidgetSelection() && !this.caretSpent(false)) return false;
+			const block: CellBlock =
+				mod && evt.shiftKey
+					? { r1: 0, c1: 0, r2: last, c2: cols - 1 }
+					: mod
+						? { r1: 0, c1: at.col, r2: last, c2: at.col }
+						: { r1: at.row, c1: 0, r2: at.row, c2: cols - 1 };
+			this.keyAnchor = { table: at.table, row: block.r1, col: block.c1 };
+			return this.selectNative(at.table, block, false);
+		}
+
+		const step: Record<string, [number, number]> = {
+			ArrowUp: [-1, 0],
+			ArrowDown: [1, 0],
+			ArrowLeft: [0, -1],
+			ArrowRight: [0, 1],
+		};
+		const d = step[evt.key];
+		if (!d) return false;
+		if (!evt.shiftKey && !mod) return false;
+		const [dr, dc] = d;
+		const live = this.readWidgetSelection();
+		// Sideways keys belong to the text until the caret runs out of it, whether
+		// they are extending a selection or jumping by word. Once a block is
+		// selected there is no single caret left to be considerate of.
+		if (dc !== 0 && !live && !this.caretSpent(dc < 0)) return false;
+
+		// The remembered anchor only means anything while the selection it belongs
+		// to is still live. Once there is none, the cursor's own cell is the
+		// anchor, which is what starting a fresh selection means and what saves
+		// this from having to be cleared by every gesture that could invalidate it.
+		const anchor =
+			live && this.keyAnchor && this.keyAnchor.table === at.table
+				? this.keyAnchor
+				: { table: at.table, row: at.row, col: at.col };
+		const head = this.keyHead(at.table, rows, cols, anchor, at, dr, dc, mod);
+		if (!head) return false;
+		if (!evt.shiftKey) {
+			// A plain Ctrl+Arrow moves rather than selects, so it lands the cursor
+			// and leaves the anchor there for whatever Shift press comes next.
+			// selectCells cannot express one cell (it refuses a range that starts
+			// and ends in the same place), so this goes through cell focus.
+			this.keyAnchor = { table: at.table, row: head.r, col: head.c };
+			this.dropStickySelection();
+			return this.focusCell(at.table, head.r, head.c);
+		}
+		this.keyAnchor = anchor;
+		const block: CellBlock = {
+			r1: Math.min(anchor.row, head.r),
+			c1: Math.min(anchor.col, head.c),
+			r2: Math.max(anchor.row, head.r),
+			c2: Math.max(anchor.col, head.c),
+		};
+		// Shrinking back onto the anchor is a selection of one, which selectCells
+		// will not express: it refuses a range that starts and ends in the same
+		// place. That is the moment the selection should simply stop existing.
+		if (block.r1 === block.r2 && block.c1 === block.c2) {
+			this.dropStickySelection();
+			return this.focusCell(at.table, block.r1, block.c1);
+		}
+		return this.selectNative(at.table, block, false);
+	}
+
+	/**
+	 * Where the head lands. A plain arrow steps one cell; with Ctrl it runs to the
+	 * edge of the data.
+	 *
+	 * Rows an AutoFilter is hiding are stepped over rather than through, so the
+	 * keys move between the rows on screen. Landing a selection edge on a row
+	 * that cannot be seen is the one outcome with nothing to recommend it.
+	 */
+	private keyHead(
+		table: HTMLTableElement,
+		rows: HTMLTableRowElement[],
+		cols: number,
+		anchor: { row: number; col: number },
+		at: { row: number; col: number },
+		dr: number,
+		dc: number,
+		toEdge: boolean
+	): { r: number; c: number } | null {
+		// the head is the corner away from the anchor, which is where the last
+		// press left it; with no selection it is the cursor's own cell
+		const live = this.readWidgetSelection();
+		let hr = at.row;
+		let hc = at.col;
+		if (live) {
+			const b = this.selectionBlock(table);
+			if (b) {
+				hr = anchor.row === b.r1 ? b.r2 : b.r1;
+				hc = anchor.col === b.c1 ? b.c2 : b.c1;
+			}
+		}
+		const shown = rows.map((tr, i) => i).filter((i) => i === 0 || !rows[i].hasClass("ptb-fhidden"));
+		if (!shown.length) return null;
+		if (toEdge) {
+			const grid = shown.map((i) => Array.from({ length: cols }, (_, c) => cellText(rows[i].cells[c])));
+			const y = Math.max(0, shown.indexOf(hr));
+			const p = edgeInDirection(grid, y, hc, dr, dc);
+			return { r: shown[p.r] ?? hr, c: p.c };
+		}
+		if (dc !== 0) return { r: hr, c: Math.max(0, Math.min(cols - 1, hc + dc)) };
+		const y = shown.indexOf(hr);
+		const next = Math.max(0, Math.min(shown.length - 1, (y < 0 ? 0 : y) + dr));
+		return { r: shown[next], c: hc };
+	}
+
+	/** Put the cursor in one cell, which is a move rather than a selection. */
+	private focusCell(table: HTMLTableElement, row: number, col: number): boolean {
+		try {
+			const t = this.acquireWidgetTable(table);
+			if (!t?.receiveCellFocus) return false;
+			t.receiveCellFocus(row, col);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** The rectangle Obsidian's current selection covers, in grid coordinates. */
+	private selectionBlock(table: HTMLTableElement): CellBlock | null {
+		const t = this.acquireWidgetTable(table);
+		const sel = t?.selectedCells;
+		if (!Array.isArray(sel) || !sel.length) return null;
+		const rs: number[] = [];
+		const cs: number[] = [];
+		for (const c of sel) {
+			const rc = c as { row?: number; col?: number };
+			if (typeof rc.row === "number" && typeof rc.col === "number") {
+				rs.push(rc.row);
+				cs.push(rc.col);
+			}
+		}
+		if (!rs.length) return null;
+		return { r1: Math.min(...rs), c1: Math.min(...cs), r2: Math.max(...rs), c2: Math.max(...cs) };
 	}
 
 	/** Open the targeted column's filter from a command or a menu, where there is
