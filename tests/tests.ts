@@ -76,6 +76,7 @@ import {
 	tableGrid,
 	gridRowOf,
 	blockTargets,
+	edgeInDirection,
 	fillSeries,
 	planDragFill,
 	planCopyCells,
@@ -1218,6 +1219,30 @@ const pasted = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }],
 ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as plain values");
 eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
 eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
+
+// --- Ctrl+Arrow: the jump to the edge of the data ---
+const NAV = [
+	["Item", "Qty", "", "Note"],
+	["a", "1", "", "x"],
+	["b", "2", "", ""],
+	["", "", "", ""],
+	["c", "3", "", "y"],
+];
+const at = (r: number, c: number, dr: number, dc: number) => {
+	const p = edgeInDirection(NAV, r, c, dr, dc);
+	return `${p.r},${p.c}`;
+};
+eq(at(0, 0, 1, 0), "2,0", "down a run stops on its last filled cell");
+eq(at(2, 0, 1, 0), "4,0", "and from there the next press jumps the gap to the next thing there is");
+eq(at(4, 0, 1, 0), "4,0", "with nothing below, it stays put rather than falling off the table");
+eq(at(0, 1, 1, 0), "2,1", "the same run rule reads down any column");
+eq(at(0, 0, 0, 1), "0,1", "across a run of two, the last of the run");
+eq(at(0, 1, 0, 1), "0,3", "and from the end of a run, over the gap to what follows");
+eq(at(0, 3, 0, 1), "0,3", "the far edge is where it stops going right");
+eq(at(4, 0, -1, 0), "2,0", "a blank neighbour above is jumped, landing on the bottom of the run beyond it");
+eq(at(2, 0, -1, 0), "0,0", "while a run above walks to its top");
+eq(at(1, 2, 1, 0), "4,2", "an empty column walks all the way to the far edge");
+eq(edgeInDirection([], 0, 0, 1, 0).r, 0, "an empty grid has no edge to find");
 
 // --- AutoFilter ---
 const FLT = [

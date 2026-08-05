@@ -2074,6 +2074,50 @@ export function gridRowOf(g: Grid, line: number): number {
 export type CellBlock = { r1: number; r2: number; c1: number; c2: number };
 
 /**
+ * Where Ctrl+Arrow lands: Excel's jump to the edge of the data.
+ *
+ * The rule is the one people have in their fingers even when they cannot say
+ * it. From a cell whose neighbour holds something, travel to the last cell of
+ * that run. From one whose neighbour is empty, jump the gap and land on the
+ * next thing there is. With nothing left in that direction, go to the edge, so
+ * the key always moves and the table always has a far side.
+ *
+ * `grid` is text only, so it can be built from the file or from the screen and
+ * neither has to explain itself here.
+ */
+export function edgeInDirection(
+	grid: string[][],
+	r: number,
+	c: number,
+	dr: number,
+	dc: number
+): { r: number; c: number } {
+	const rows = grid.length;
+	if (!rows) return { r, c };
+	const cols = grid[0]?.length ?? 0;
+	const inside = (y: number, x: number) => y >= 0 && y < rows && x >= 0 && x < cols;
+	const filled = (y: number, x: number) => inside(y, x) && (grid[y]?.[x] ?? "").trim() !== "";
+	if (!inside(r + dr, c + dc)) return { r, c };
+
+	let y = r + dr;
+	let x = c + dc;
+	if (!filled(y, x)) {
+		// over a gap: the next thing there is, or the far edge if there is none
+		while (inside(y + dr, x + dc) && !filled(y, x)) {
+			y += dr;
+			x += dc;
+		}
+		return { r: y, c: x };
+	}
+	// along a run: stop on its last cell
+	while (filled(y + dr, x + dc)) {
+		y += dr;
+		x += dc;
+	}
+	return { r: y, c: x };
+}
+
+/**
  * Doc coordinates for every cell of a block, given the table's first line.
  *
  * Row 0 is the header and sits on that first line; body rows clear the |---|
