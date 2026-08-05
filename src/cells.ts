@@ -87,7 +87,7 @@ export function colFromCh(row: ParsedRow, ch: number): number {
 	return Math.max(0, Math.min(row.cellCount - 1, n - 1));
 }
 
-const SPAN_RE = /^\s*<span class="(ptb[^"]*)"((?:\s+(?:style|data-sum|data-calc|data-f|data-b|data-fmt|data-w|data-rule|data-tbl)="[^"]*")*)\s*>([\s\S]*)<\/span>\s*$/;
+const SPAN_RE = /^\s*<span class="(ptb[^"]*)"((?:\s+(?:style|data-sum|data-calc|data-f|data-b|data-fmt|data-w|data-rule|data-tbl|data-flt)="[^"]*")*)\s*>([\s\S]*)<\/span>\s*$/;
 
 export type SumDir = "column" | "row";
 export type CalcFn = "sum" | "avg" | "min" | "max" | "count";
@@ -107,6 +107,7 @@ export function parseCellContent(raw: string): {
 	w: string | null;
 	rule: string | null;
 	tbl: string | null;
+	flt: string | null;
 	inner: string;
 } {
 	const m = raw.match(SPAN_RE);
@@ -122,6 +123,7 @@ export function parseCellContent(raw: string): {
 			w: null,
 			rule: null,
 			tbl: null,
+			flt: null,
 			inner: raw.trim(),
 		};
 	}
@@ -146,7 +148,8 @@ export function parseCellContent(raw: string): {
 	const w = attrs.match(/data-w="(\d{2,4})"/)?.[1] ?? null;
 	const rule = attrs.match(/data-rule="([^"]*)"/)?.[1] || null;
 	const tbl = attrs.match(/data-tbl="([^"]*)"/)?.[1] || null;
-	return { bg, fg, calc, formula, borders, fmt, hl, w, rule, tbl, inner: m[3] };
+	const flt = attrs.match(/data-flt="([^"]*)"/)?.[1] || null;
+	return { bg, fg, calc, formula, borders, fmt, hl, w, rule, tbl, flt, inner: m[3] };
 }
 
 /** Compress #RRGGBB to #RGB when possible; leave anything else untouched. */
@@ -169,14 +172,15 @@ export function buildCellContent(
 	hl = false,
 	w: string | null = null,
 	rule: string | null = null,
-	tbl: string | null = null
+	tbl: string | null = null,
+	flt: string | null = null
 ): string {
 	// edge letters, the weight markers "=~.", and a "#colour" suffix all have
 	// to survive the scrub; it exists to keep quotes and markup out, not to
 	// validate, which mergeBorders already did
 	const b = borders ? borders.replace(/[^a-zA-Z=~.#]/g, "") : "";
 	const width = w && /^\d{2,4}$/.test(w) ? w : null;
-	if (!bg && !fg && !calc && !formula && !b && !fmt && !width && !rule && !tbl) return inner;
+	if (!bg && !fg && !calc && !formula && !b && !fmt && !width && !rule && !tbl && !flt) return inner;
 	// Keep the wrapper as short as possible, it is what users see as raw
 	// markup when a cell is edited in Source mode. parseCellContent still
 	// reads the older, longer formats (class="ptb ptb-sum ptb-fill",
@@ -191,6 +195,7 @@ export function buildCellContent(
 	if (width) attrs += ` data-w="${width}"`;
 	if (rule) attrs += ` data-rule="${rule.replace(/"/g, "")}"`;
 	if (tbl) attrs += ` data-tbl="${tbl.replace(/"/g, "")}"`;
+	if (flt) attrs += ` data-flt="${flt.replace(/"/g, "")}"`;
 	let style = "";
 	if (bg) style += `background:${shortHex(bg)};`;
 	if (fg) style += `color:${shortHex(fg)};`;
@@ -293,7 +298,7 @@ export function planEdits(lines: string[], target: CellTargetLoc, patch: Patch, 
 				// so every existing caller keeps preserving whatever the cell already had
 				const nborders = patch.borders === undefined ? parsed.borders : patch.borders;
 				const nfmt = patch.fmt === undefined ? parsed.fmt : patch.fmt;
-			const next = ` ${buildCellContent(parsed.inner, nbg, nfg, parsed.calc, parsed.formula, nborders, nfmt, nhl, parsed.w, parsed.rule, parsed.tbl)} `;
+			const next = ` ${buildCellContent(parsed.inner, nbg, nfg, parsed.calc, parsed.formula, nborders, nfmt, nhl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			if (next !== old) {
 				r.pieces[c + 1] = next;
 				changed = true;
@@ -462,7 +467,7 @@ export function planToggleCalc(lines: string[], target: CellTargetLoc, spec: Cal
 	const parsed = parseCellContent(rowLn.pieces[col + 1]);
 
 	if (parsed.calc && parsed.calc.fn === spec.fn && parsed.calc.dir === spec.dir) {
-		rowLn.pieces[col + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+		rowLn.pieces[col + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 		const text = rowLn.prefix + rowLn.pieces.join("|");
 		return {
 			edits: [{ line: ln, text }],
@@ -479,7 +484,7 @@ export function planToggleCalc(lines: string[], target: CellTargetLoc, spec: Cal
 	if (!res.count) {
 		return { edits: [], cursorLine: ln, cursorCh: 0, count: 0, formatted: "", toggledOff: false, switched: false };
 	}
-	rowLn.pieces[col + 1] = ` ${buildCellContent(res.formatted, parsed.bg, parsed.fg, spec, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+	rowLn.pieces[col + 1] = ` ${buildCellContent(res.formatted, parsed.bg, parsed.fg, spec, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 	const text = rowLn.prefix + rowLn.pieces.join("|");
 	return {
 		edits: [{ line: ln, text }],
@@ -503,7 +508,7 @@ export function planFreezeCalc(lines: string[], target: CellTargetLoc): CalcTogg
 	if (!parsed.calc) {
 		return { edits: [], cursorLine: ln, cursorCh: 0, count: 0, formatted: "", toggledOff: false, switched: false };
 	}
-	rowLn.pieces[col + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+	rowLn.pieces[col + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 	const text = rowLn.prefix + rowLn.pieces.join("|");
 	return {
 		edits: [{ line: ln, text }],
@@ -593,7 +598,7 @@ export function recalcCalcs(lines: string[]): { line: number; text: string }[] {
 					const em = splitEmphasis(parsed.inner);
 					const wrapped = em.lead + st.text + em.trail;
 					if (wrapped === parsed.inner && st.fg === parsed.fg) continue;
-					r.pieces[c + 1] = ` ${buildCellContent(wrapped, parsed.bg, st.fg, parsed.calc, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+					r.pieces[c + 1] = ` ${buildCellContent(wrapped, parsed.bg, st.fg, parsed.calc, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 					lineChanged = true;
 					continue;
 				}
@@ -612,7 +617,7 @@ export function recalcCalcs(lines: string[]): { line: number; text: string }[] {
 				const emf = splitEmphasis(parsed.formula ? parsed.inner : "");
 				const wrappedF = emf.lead + st.text + emf.trail;
 				if (parsed.formula && wrappedF === parsed.inner && st.fg === parsed.fg) continue;
-				r.pieces[c + 1] = ` ${buildCellContent(wrappedF, parsed.bg, st.fg, null, formula, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+				r.pieces[c + 1] = ` ${buildCellContent(wrappedF, parsed.bg, st.fg, null, formula, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 				lineChanged = true;
 			}
 			if (lineChanged) {
@@ -847,7 +852,7 @@ export function planTextStyle(lines: string[], target: CellTargetLoc, style: Tex
 		for (const c of cols) {
 			const parsed = parseCellContent(r.pieces[c + 1]);
 			if (!parsed.inner) continue;
-			const next = ` ${buildCellContent(toggleMark(parsed.inner, style), parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+			const next = ` ${buildCellContent(toggleMark(parsed.inner, style), parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			if (next !== r.pieces[c + 1]) {
 				r.pieces[c + 1] = next;
 				changed = true;
@@ -1044,15 +1049,15 @@ export function planFormatNumber(lines: string[], target: CellTargetLoc, fmt: Nu
 				// live cells: store the quick format as a cell tag ("Auto" clears it)
 				const tag = QUICK_TAGS[fmt];
 				if ((parsed.fmt ?? null) === tag) continue;
-				next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, tag, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+				next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, tag, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			} else if (fmt === "date") {
 				const p = parseDateCell(parsed.inner.trim());
 				if (!p) continue;
-				next = ` ${buildCellContent(formatDateSpec(p, "mdy"), parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+				next = ` ${buildCellContent(formatDateSpec(p, "mdy"), parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			} else {
 				const n = parseNumeric(parsed.inner);
 				if (!n) continue;
-				next = ` ${buildCellContent(formatValue(n.value, n.decimals, fmt), parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+				next = ` ${buildCellContent(formatValue(n.value, n.decimals, fmt), parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			}
 			if (next !== r.pieces[c + 1]) {
 				r.pieces[c + 1] = next;
@@ -1246,7 +1251,7 @@ export function formatPiece(piece: string, spec: FmtSpec): string | null {
 	if (text == null) return null;
 	// reformat the value but keep whole-value bold/italic/strike
 	const em = splitEmphasis(parsed.inner);
-	return ` ${buildCellContent(em.lead + text + em.trail, parsed.bg, fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+	return ` ${buildCellContent(em.lead + text + em.trail, parsed.bg, fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 }
 
 /**
@@ -1289,7 +1294,7 @@ export function planFormatCells(lines: string[], target: CellTargetLoc, spec: Fm
 				next =
 					(parsed.fmt ?? null) === tag
 						? null
-						: ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, tag, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+						: ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, tag, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			} else {
 				next = formatPiece(piece, spec);
 			}
@@ -1418,14 +1423,14 @@ export function planStickyFormat(
 			const cur = parsed.fmt ?? null;
 			const want = c === 0 ? want0 : cur?.startsWith("row:") ? null : cur;
 			if (cur === want) continue;
-			r.pieces[c + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, want, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+			r.pieces[c + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, want, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			changed = true;
 		}
 	} else {
 		const col = Math.min(target.col, r.cellCount - 1);
 		const parsed = parseCellContent(r.pieces[col + 1]);
 		if ((parsed.fmt ?? null) !== tag) {
-			r.pieces[col + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, tag, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+			r.pieces[col + 1] = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, parsed.borders, tag, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			changed = true;
 		}
 	}
@@ -1664,7 +1669,7 @@ export function planBorders(lines: string[], target: CellTargetLoc, action: Bord
 					? mergeBorders(parsed.borders, [{ edge: action as Edge, weight: "thin" }])
 					: parsed.borders;
 			}
-			const next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, nb, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+			const next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, nb, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			if (next !== r.pieces[c + 1]) {
 				r.pieces[c + 1] = next;
 				changed = true;
@@ -1717,7 +1722,7 @@ export function planDrawBorders(
 				if (!hit.edge) continue;
 				nb = mergeBorders(parsed.borders, [{ edge: hit.edge, weight: pen.weight }], pen.color);
 			}
-			const next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, nb, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+			const next = ` ${buildCellContent(parsed.inner, parsed.bg, parsed.fg, parsed.calc, parsed.formula, nb, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 			if (next !== r.pieces[c + 1]) {
 				r.pieces[c + 1] = next;
 				changed = true;
@@ -1911,7 +1916,7 @@ export function planClearContents(lines: string[], target: CellTargetLoc, scope:
 		let changed = false;
 		for (const c of cols) {
 			const parsed = parseCellContent(r.pieces[c + 1]);
-			const rebuilt = buildCellContent("", parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl);
+			const rebuilt = buildCellContent("", parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt);
 			const next = rebuilt ? ` ${rebuilt} ` : "   ";
 			if (next !== r.pieces[c + 1]) {
 				r.pieces[c + 1] = next;
@@ -2317,8 +2322,8 @@ export function shiftRowFormulas(text: string, op: RefOp): string {
 		const next = shiftFormulaRefs(src, op);
 		if (next === src) continue;
 		r.pieces[c + 1] = p.formula
-			? ` ${buildCellContent(p.inner, p.bg, p.fg, null, next, p.borders, p.fmt, p.hl, p.w, p.rule, p.tbl)} `
-			: ` ${buildCellContent(next, p.bg, p.fg, p.calc, null, p.borders, p.fmt, p.hl, p.w, p.rule, p.tbl)} `;
+			? ` ${buildCellContent(p.inner, p.bg, p.fg, null, next, p.borders, p.fmt, p.hl, p.w, p.rule, p.tbl, p.flt)} `
+			: ` ${buildCellContent(next, p.bg, p.fg, p.calc, null, p.borders, p.fmt, p.hl, p.w, p.rule, p.tbl, p.flt)} `;
 		changed = true;
 	}
 	return changed ? r.prefix + r.pieces.join("|") : text;
@@ -3158,13 +3163,13 @@ export function planSetCellValue(lines: string[], target: CellTargetLoc, raw: st
 				value = formulaErrorText(e);
 			}
 		}
-		rebuilt = buildCellContent(value, parsed.bg, parsed.fg, null, t, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl);
+		rebuilt = buildCellContent(value, parsed.bg, parsed.fg, null, t, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt);
 	} else {
 		// slot the new text back inside the wrappers the old text wore; clearing
 		// the cell outright drops them, since there is nothing left to wrap
 		const parts = cellTextParts(parsed.inner);
 		const kept = t ? parts.lead + t + parts.trail : "";
-		rebuilt = buildCellContent(kept, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl);
+		rebuilt = buildCellContent(kept, parsed.bg, parsed.fg, null, null, parsed.borders, parsed.fmt, parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt);
 	}
 	r.pieces[col + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
 	const text = r.prefix + r.pieces.join("|");
@@ -3286,7 +3291,7 @@ export function planApplyRule(
 		const bg = sb
 			? lerpHex(sb.lo, sb.hi, sb.max > sb.min ? (parseNumeric(parsed.inner)!.value - sb.min) / (sb.max - sb.min) : 0.5)
 			: (rule.bg ?? parsed.bg);
-		const next = ` ${buildCellContent(parsed.inner, bg, rule.fg ?? parsed.fg, parsed.calc, parsed.formula, parsed.borders, parsed.fmt, rule.bg || sb ? false : parsed.hl, parsed.w, parsed.rule, parsed.tbl)} `;
+		const next = ` ${buildCellContent(parsed.inner, bg, rule.fg ?? parsed.fg, parsed.calc, parsed.formula, parsed.borders, parsed.fmt, rule.bg || sb ? false : parsed.hl, parsed.w, parsed.rule, parsed.tbl, parsed.flt)} `;
 		if (next !== r.pieces[col + 1]) {
 			r.pieces[col + 1] = next;
 			edits.push({ line: i, text: r.prefix + r.pieces.join("|") });
@@ -3312,6 +3317,156 @@ export function parseRuleTags(tag: string): { op: RuleOp; value: string; bg: str
 		if (r) out.push(r);
 	}
 	return out;
+}
+
+/* ---------------- AutoFilter: one filter per column, stored on its header ---------------- */
+
+/**
+ * A column's filter. `in` and `ex` are the checkbox list, held as whichever
+ * side is shorter: `in` shows only the values named, `ex` shows everything
+ * except them. Which one a filter uses decides what happens to a value that
+ * arrives later, and both answers are wanted: a list built by unticking two of
+ * forty should keep showing new arrivals, and one built by ticking a single
+ * value should not. The rest are Excel's condition filters and share their
+ * meaning, and their matching, with the conditional color rules.
+ */
+export type FilterOp = "in" | "ex" | "gt" | "lt" | "eq" | "contains" | "starts" | "ends" | "between" | "empty" | "notempty";
+
+export interface ColFilter {
+	op: FilterOp;
+	/** For in/ex, the values, `~` separated. Otherwise the condition's operand. */
+	value: string;
+}
+
+const FILTER_OPS = "in|ex|gt|lt|eq|contains|starts|ends|between|empty|notempty";
+
+/**
+ * Filter values ride inside an HTML attribute, next to a `~` separated list, so
+ * the characters that would end either one are traded for spaces. Cell text
+ * goes through the same trade before it is compared, so a value holding one of
+ * them still matches itself; two values differing only in those characters
+ * become one entry in the list, which is the price of keeping the markup
+ * unbreakable.
+ */
+export function fltSafe(s: string): string {
+	return s.replace(/[:"|;~]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function filterTag(f: ColFilter | null): string | null {
+	if (!f) return null;
+	// An empty list is not a filter either way round: nothing excluded shows
+	// everything, and nothing included would hide the entire column, which is a
+	// state to clear rather than to store.
+	if ((f.op === "in" || f.op === "ex") && !f.value) return null;
+	return `${f.op}:${f.op === "in" || f.op === "ex" ? f.value : f.value.replace(/[:"|;]/g, " ").trim()}`;
+}
+
+export function parseFilterTag(tag: string | null): ColFilter | null {
+	if (!tag) return null;
+	const m = tag.match(new RegExp(`^(${FILTER_OPS}):([\\s\\S]*)$`));
+	return m ? { op: m[1] as FilterOp, value: m[2] } : null;
+}
+
+/**
+ * The values of an `in`/`ex` filter.
+ *
+ * A blank cell is a value people filter by, and it cannot be stored as an empty
+ * segment: a tag whose whole value is empty is how "no filter" is written. It
+ * rides as a single space instead, which no real value can be, because fltSafe
+ * trims what it is given.
+ */
+export const FLT_BLANK = " ";
+
+export function filterValues(f: ColFilter): string[] {
+	return f.value ? f.value.split("~").map((v) => (v === FLT_BLANK ? "" : v)) : [];
+}
+
+/** One value as it is stored in a list. */
+export function fltValue(s: string): string {
+	return fltSafe(s) || FLT_BLANK;
+}
+
+/** Whether a cell's text passes the filter, which is to say whether its row
+ *  stays on screen. An unreadable filter hides nothing. */
+export function filterHit(inner: string, f: ColFilter | null): boolean {
+	if (!f) return true;
+	const text = normalizeText(inner).trim();
+	if (f.op === "in" || f.op === "ex") {
+		const has = filterValues(f).includes(fltSafe(text));
+		return f.op === "in" ? has : !has;
+	}
+	if (f.op === "starts") return !!f.value && text.toLowerCase().startsWith(f.value.toLowerCase());
+	if (f.op === "ends") return !!f.value && text.toLowerCase().endsWith(f.value.toLowerCase());
+	return ruleHit(inner, f.op as RuleOp, f.value);
+}
+
+/** The filter stored on the target's column header, if any. */
+export function columnFilterAt(lines: string[], target: CellTargetLoc): ColFilter | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const anchor = parseRow(lines[ln]);
+	if (!anchor) return null;
+	const col = Math.min(target.col, anchor.cellCount - 1);
+	const { start, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const hr = parseRow(lines[start]);
+	if (!hr || hr.isDelim || col >= hr.cellCount) return null;
+	return parseFilterTag(parseCellContent(hr.pieces[col + 1]).flt);
+}
+
+/**
+ * Store (or clear) the filter on the target's column header.
+ *
+ * Filtering hides rows on screen and never rewrites them, so this is the only
+ * edit an AutoFilter makes: one attribute on one header cell, which is where
+ * the column's width and its color rules already live. Take the plugin away
+ * and every row is simply visible again.
+ */
+export function planSetColumnFilter(lines: string[], target: CellTargetLoc, filter: ColFilter | null): EditPlan | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const anchor = parseRow(lines[ln]);
+	if (!anchor) return null;
+	const col = Math.min(target.col, anchor.cellCount - 1);
+	const { start, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const hr = parseRow(lines[start]);
+	if (!hr || hr.isDelim || col >= hr.cellCount) return null;
+	const hp = parseCellContent(hr.pieces[col + 1]);
+	const tag = filterTag(filter);
+	if ((hp.flt ?? null) === tag) return { edits: [], cursorLine: ln, cursorCh: cursorForCol(lines[ln], col) };
+	const rebuilt = buildCellContent(hp.inner, hp.bg, hp.fg, hp.calc, hp.formula, hp.borders, hp.fmt, hp.hl, hp.w, hp.rule, hp.tbl, tag);
+	hr.pieces[col + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
+	return {
+		edits: [{ line: start, text: hr.prefix + hr.pieces.join("|") }],
+		cursorLine: ln,
+		cursorCh: cursorForCol(lines[ln], col),
+	};
+}
+
+/** Clear every column filter in the target's table. */
+export function planClearFilters(lines: string[], target: CellTargetLoc): (EditPlan & { cleared: number }) | null {
+	const ln = locateLine(lines, target);
+	if (ln == null) return null;
+	const { start, delimIdx } = tableBounds(lines, ln);
+	if (delimIdx <= start) return null;
+	const hr = parseRow(lines[start]);
+	if (!hr || hr.isDelim) return null;
+	let cleared = 0;
+	for (let c = 0; c < hr.cellCount; c++) {
+		const hp = parseCellContent(hr.pieces[c + 1]);
+		if (!hp.flt) continue;
+		const rebuilt = buildCellContent(hp.inner, hp.bg, hp.fg, hp.calc, hp.formula, hp.borders, hp.fmt, hp.hl, hp.w, hp.rule, hp.tbl, null);
+		hr.pieces[c + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
+		cleared++;
+	}
+	const text = hr.prefix + hr.pieces.join("|");
+	return {
+		edits: cleared ? [{ line: start, text }] : [],
+		cursorLine: ln,
+		cursorCh: cursorForCol(lines[ln], 0),
+		cleared,
+	};
 }
 
 /** The live rules stored on the target's column header, in priority order. */
@@ -3356,7 +3511,7 @@ export function planSetColumnRules(
 		: null;
 	const edits: { line: number; text: string }[] = [];
 	if ((hp.rule ?? null) !== tag) {
-		const rebuilt = buildCellContent(hp.inner, hp.bg, hp.fg, hp.calc, hp.formula, hp.borders, hp.fmt, hp.hl, hp.w, tag, hp.tbl);
+		const rebuilt = buildCellContent(hp.inner, hp.bg, hp.fg, hp.calc, hp.formula, hp.borders, hp.fmt, hp.hl, hp.w, tag, hp.tbl, hp.flt);
 		hr.pieces[col + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
 		edits.push({ line: start, text: hr.prefix + hr.pieces.join("|") });
 	}
@@ -3476,7 +3631,8 @@ export function applyLiveRules(lines: string[]): { line: number; text: string }[
 							winBg && norm(nbg) === norm(winBg) ? false : parsed.hl,
 							parsed.w,
 							parsed.rule,
-							parsed.tbl
+							parsed.tbl,
+							parsed.flt
 						);
 						r.pieces[c + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
 						changed = true;
@@ -3640,7 +3796,8 @@ export function planToggleCheckbox(lines: string[], target: CellTargetLoc, scope
 				parsed.hl,
 				parsed.w,
 				parsed.rule,
-				parsed.tbl
+				parsed.tbl,
+				parsed.flt
 			);
 			const next = rebuilt ? ` ${rebuilt} ` : "   ";
 			if (next !== r.pieces[c + 1]) {
@@ -3677,7 +3834,8 @@ export function planSetChecked(lines: string[], target: CellTargetLoc, checked: 
 		parsed.hl,
 		parsed.w,
 		parsed.rule,
-		parsed.tbl
+		parsed.tbl,
+		parsed.flt
 	);
 	r.pieces[col + 1] = ` ${rebuilt} `;
 	const text = r.prefix + r.pieces.join("|");
@@ -3709,7 +3867,8 @@ export function planSetColumnWidth(lines: string[], target: CellTargetLoc, width
 		parsed.hl,
 		w,
 		parsed.rule,
-		parsed.tbl
+		parsed.tbl,
+		parsed.flt
 	);
 	hr.pieces[col + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
 	const text = hr.prefix + hr.pieces.join("|");
@@ -3822,7 +3981,8 @@ export function planSetTableFlag(
 		parsed.hl,
 		parsed.w,
 		parsed.rule,
-		tag
+		tag,
+		parsed.flt
 	);
 	hr.pieces[cell + 1] = rebuilt ? ` ${rebuilt} ` : "   ";
 	return {
@@ -4199,7 +4359,7 @@ export function planFill(
 		let formula: string | null = null;
 		if (s.formula) formula = shiftFormulaRefs(s.formula, op);
 		else if (looksLikeFormula(s.inner)) inner = shiftFormulaRefs(s.inner, op);
-		const content = buildCellContent(inner, s.bg, s.fg, s.calc, formula, s.borders, s.fmt, s.hl, d.w, d.rule, d.tbl);
+		const content = buildCellContent(inner, s.bg, s.fg, s.calc, formula, s.borders, s.fmt, s.hl, d.w, d.rule, d.tbl, d.flt);
 		return content ? ` ${content} ` : "   ";
 	};
 
@@ -4390,7 +4550,8 @@ export function planDragFill(
 				s.hl,
 				keep.w,
 				keep.rule,
-				keep.tbl
+				keep.tbl,
+				keep.flt
 			);
 			const after = content ? ` ${content} ` : "   ";
 			if (after === r.pieces[d.col + 1]) continue;
@@ -4523,7 +4684,7 @@ function pasteCell(srcPiece: string, dstPiece: string, mode: PasteMode, rowD: nu
 	// Formats: the look travels and the value stays put, which is the format
 	// painter's contract applied to a whole block at once.
 	if (mode === "formats") {
-		return wrap(buildCellContent(d.inner, s.bg, s.fg, d.calc, d.formula, s.borders, s.fmt, s.hl, d.w, d.rule, d.tbl));
+		return wrap(buildCellContent(d.inner, s.bg, s.fg, d.calc, d.formula, s.borders, s.fmt, s.hl, d.w, d.rule, d.tbl, d.flt));
 	}
 
 	let inner = s.inner;
@@ -4543,7 +4704,7 @@ function pasteCell(srcPiece: string, dstPiece: string, mode: PasteMode, rowD: nu
 	// Formulas land in the destination's own formatting, as they do in Excel.
 	const look = mode === "all" ? s : d;
 	return wrap(
-		buildCellContent(inner, look.bg, look.fg, calc, formula, look.borders, look.fmt, look.hl, d.w, d.rule, d.tbl)
+		buildCellContent(inner, look.bg, look.fg, calc, formula, look.borders, look.fmt, look.hl, d.w, d.rule, d.tbl, d.flt)
 	);
 }
 
@@ -4551,7 +4712,7 @@ function pasteCell(srcPiece: string, dstPiece: string, mode: PasteMode, rowD: nu
  *  describe its column. */
 function emptiedCell(piece: string): string {
 	const p = parseCellContent(piece);
-	const content = buildCellContent("", null, null, null, null, null, null, false, p.w, p.rule, p.tbl);
+	const content = buildCellContent("", null, null, null, null, null, null, false, p.w, p.rule, p.tbl, p.flt);
 	return content ? ` ${content} ` : "   ";
 }
 

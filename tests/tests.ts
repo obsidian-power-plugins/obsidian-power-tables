@@ -82,6 +82,14 @@ import {
 	planPasteCells,
 	clipFromRows,
 	clipToTsv,
+	filterTag,
+	parseFilterTag,
+	filterHit,
+	fltSafe,
+	fltValue,
+	columnFilterAt,
+	planSetColumnFilter,
+	planClearFilters,
 	dragFillPreview,
 	shiftFormulaRefs,
 	formulaErrorText,
@@ -1209,6 +1217,68 @@ const pasted = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }],
 ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as plain values");
 eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
 eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
+
+// --- AutoFilter ---
+const FLT = [
+	"| Region | Amount | Status |",
+	"| - | - | - |",
+	"| East | 100 | Done |",
+	"| West | 250 | Open |",
+	"| East | 75 | Open |",
+	"| North |  | Done |",
+];
+const T0 = { line: 2, col: 0, expect: null };
+
+eq(filterTag({ op: "in", value: "East~West" }), "in:East~West", "a value list stores the values it shows");
+eq(filterTag({ op: "ex", value: "" }), null, "an empty exclusion list is not a filter");
+eq(filterTag({ op: "in", value: "" }), null, "and neither is an empty inclusion list, which would hide the column");
+eq(parseFilterTag("gt:100")?.op, "gt", "a condition filter reads back its operator");
+eq(parseFilterTag("in:a~b")?.value, "a~b", "and a list filter its values");
+eq(parseFilterTag("nonsense:1"), null, "an unreadable tag is no filter at all");
+eq(fltSafe('a;b|c"d:e~f'), "a b c d e f", "the characters that would break the tag or the list are traded for spaces");
+
+ok(filterHit("East", { op: "in", value: "East~West" }), "an included value stays on screen");
+ok(!filterHit("North", { op: "in", value: "East~West" }), "one that is not included goes");
+ok(!filterHit("East", { op: "ex", value: "East" }), "an excluded value goes");
+ok(filterHit("South", { op: "ex", value: "East" }), "and a value that arrived after the list was built stays, which is why ex exists");
+ok(filterHit("250", { op: "gt", value: "100" }), "a condition filter compares numbers as numbers");
+ok(!filterHit("75", { op: "gt", value: "100" }), "and hides what fails it");
+ok(filterHit("Open", { op: "starts", value: "op" }), "begins-with is case insensitive");
+ok(filterHit("Open", { op: "ends", value: "EN" }), "and so is ends-with");
+ok(filterHit("**East**", { op: "in", value: "East" }), "emphasis in the cell does not change the value it holds");
+ok(filterHit("anything", null), "no filter hides nothing");
+
+// a blank is a value people filter by, and an empty segment is how "no filter"
+// is written, so it has to ride as something a real value can never be
+eq(fltValue(""), " ", "a blank value stores as a single space");
+eq(fltValue("  East  "), "East", "and a real one stores trimmed, which is why the space is free to mean blank");
+eq(filterTag({ op: "in", value: fltValue("") }), "in: ", "so ticking only the blanks is a filter, not a clear");
+ok(filterHit("", { op: "in", value: " " }), "a blank cell passes a blank-only filter");
+ok(!filterHit("East", { op: "in", value: " " }), "and anything with text in it does not");
+ok(!filterHit("", { op: "ex", value: " " }), "excluding blanks hides the empty cells");
+ok(filterHit("East", { op: "in", value: "East~ " }), "a list can hold blanks alongside real values");
+ok(filterHit("", { op: "in", value: "East~ " }), "and both sides of it match");
+
+const set = applyPlan(FLT, planSetColumnFilter(FLT.slice(), T0, { op: "in", value: "East" }));
+ok(set[0].includes('data-flt="in:East"'), "the filter is stored on the column's header cell");
+ok(set[2] === FLT[2] && set[5] === FLT[5], "and no row is rewritten: filtering hides on screen, it does not edit");
+eq(columnFilterAt(set, T0)?.value, "East", "which is where it reads back from");
+const cleared = applyPlan(set, planSetColumnFilter(set.slice(), T0, null));
+ok(!cleared[0].includes("data-flt"), "clearing takes the attribute back off");
+eq(planSetColumnFilter(set.slice(), T0, { op: "in", value: "East" })!.edits.length, 0, "setting the filter it already has writes nothing");
+
+// the header carries other column markers; a filter must not displace them
+const MARKED = ['| <span class="ptb" data-w="140" data-rule="lt:0:-:#F00">Region</span> | Amount |', "| - | - |", "| East | 1 |"];
+const withFlt = applyPlan(MARKED, planSetColumnFilter(MARKED.slice(), { line: 2, col: 0, expect: null }, { op: "ex", value: "West" }));
+ok(withFlt[0].includes('data-w="140"') && withFlt[0].includes("data-rule="), "storing a filter keeps the column's width and rules");
+const widened = applyPlan(withFlt, planSetColumnWidth(withFlt.slice(), { line: 2, col: 0, expect: null }, 200));
+ok(widened[0].includes('data-flt="ex:West"'), "and setting the width keeps the filter");
+const ruled = applyPlan(withFlt, planSetColumnRules(withFlt.slice(), { line: 2, col: 0, expect: null }, [{ op: "gt", value: "5", bg: "#0F0", fg: null }]));
+ok(ruled[0].includes('data-flt="ex:West"'), "as does setting the color rules");
+
+const many = applyPlan(set, planSetColumnFilter(set.slice(), { line: 2, col: 1, expect: null }, { op: "gt", value: "50" }));
+eq(planClearFilters(many.slice(), T0)!.cleared, 2, "clear-all takes every column's filter off in one edit");
+ok(!applyPlan(many, planClearFilters(many.slice(), T0)!)[0].includes("data-flt"), "leaving no filter behind");
 
 // --- operators: ^ & % ---
 const errOf = (f: () => unknown): string => {
