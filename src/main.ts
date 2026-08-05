@@ -74,6 +74,9 @@ import {
 	planSetColumnFilter,
 	planClearFilters,
 	planSetColumnList,
+	planSummarize,
+	SummaryFn,
+	normalizeText,
 	columnListAt,
 	columnDistinct,
 	barPercents,
@@ -716,6 +719,7 @@ export default class PowerTablesPlugin extends Plugin {
 		});
 		this.addCommand({ id: "copy-csv", icon: "copy", name: "Copy table as CSV", callback: () => void this.copyTableCsv() });
 		this.addCommand({ id: "edit-formula", icon: "calculator", name: "Edit cell value / formula…", callback: () => this.openFormulaModal() });
+		this.addCommand({ id: "summarize", icon: "table-2", name: "Summarize table…", callback: () => this.openSummarizeModal() });
 		this.addCommand({ id: "rule-modal", icon: "palette", name: "Conditional color rule…", callback: () => this.openRulesModal() });
 		this.addCommand({ id: "format-cells", icon: "paintbrush", name: "Format cells…", callback: () => this.openFormatModal() });
 		this.addCommand({
@@ -1843,6 +1847,65 @@ export default class PowerTablesPlugin extends Plugin {
 		const tgt = this.targetFromCell(cell);
 		if (tgt) apply(tgt);
 		else void this.fallbackTargetFromCell(cell).then((fb) => fb && apply(fb));
+	}
+
+	/* ---------------- summarize ---------------- */
+
+	openSummarizeModal() {
+		const t = this.resolveTarget();
+		if (!t) return;
+		const heads = this.headerTexts(t);
+		if (heads.length < 2) {
+			new Notice("Power Tables: a summary needs a table with at least two columns.");
+			return;
+		}
+		new SummarizeModal(this.app, this, t, heads).open();
+	}
+
+	async summarize(target: CellTarget, group: number, value: number, fn: SummaryFn) {
+		const plan = await this.runPlan(target, (lines) => planSummarize(lines, target, group, value, fn));
+		if (!plan) {
+			new Notice("Power Tables: nothing to summarize in that table.");
+			return;
+		}
+		new Notice(`Summary inserted: ${plan.groups} group${plan.groups === 1 ? "" : "s"}.`);
+	}
+
+	/** The targeted table's header texts, for naming columns in a dialog. */
+	headerTexts(target: CellTarget): string[] {
+		const ed = target.editor ?? this.editorForPath(target.path);
+		if (!ed) return [];
+		const lines = ed.getValue().split("\n");
+		const ln = locateLine(lines, target);
+		if (ln == null) return [];
+		const { start, delimIdx } = tableBounds(lines, ln);
+		if (delimIdx <= start) return [];
+		const hr = parseRow(lines[start]);
+		if (!hr || hr.isDelim) return [];
+		return Array.from({ length: hr.cellCount }, (_, c) =>
+			normalizeText(parseCellContent(hr.pieces[c + 1]).inner).trim()
+		);
+	}
+
+	/** Which of the table's columns hold numbers, so a dialog can guess well. */
+	numericColumns(target: CellTarget): number[] {
+		const ed = target.editor ?? this.editorForPath(target.path);
+		if (!ed) return [];
+		const lines = ed.getValue().split("\n");
+		const ln = locateLine(lines, target);
+		if (ln == null) return [];
+		const { start, end, delimIdx } = tableBounds(lines, ln);
+		if (delimIdx < 0) return [];
+		const hits = new Map<number, number>();
+		for (let i = delimIdx + 1; i <= end; i++) {
+			const r = parseRow(lines[i]);
+			if (!r || r.isDelim) continue;
+			for (let c = 0; c < r.cellCount; c++) {
+				if (parseNumeric(parseCellContent(r.pieces[c + 1]).inner)) hits.set(c, (hits.get(c) ?? 0) + 1);
+			}
+		}
+		void start;
+		return [...hits.keys()].sort((a, b) => a - b);
 	}
 
 	/** The dialog behind "Data validation…": the column's values, one per line. */
@@ -4225,6 +4288,7 @@ export default class PowerTablesPlugin extends Plugin {
 			["Filter column…", "list-filter", () => this.openFilterForTarget()],
 			["Clear filters", "filter-x", () => void this.clearFilters()],
 			["Data validation…", "list-checks", () => this.openListModal()],
+			["Summarize…", "table-2", () => this.openSummarizeModal()],
 			["Copy cells", "copy", () => void this.copyCells()],
 			["Cut cells", "scissors", () => void this.copyCells(true)],
 			["Paste cells", "clipboard-paste", () => void this.pasteCells()],
@@ -5348,6 +5412,9 @@ class PanelUI {
 		);
 		this.dataBtn(dgrid, "Copy CSV", "Copy the table to the clipboard as CSV", () => void this.plugin.copyTableCsv());
 		this.dataBtn(dgrid, "Rules…", "Conditional color rule for the targeted column", () => this.plugin.openRulesModal());
+		this.dataBtn(dgrid, "Summarize…", "Group the rows by one column and aggregate another into a new table", () =>
+			this.plugin.openSummarizeModal()
+		);
 		this.dataBtn(dgrid, "List…", "Data validation: the values this column is allowed to hold", () =>
 			this.plugin.openListModal()
 		);
@@ -5802,6 +5869,61 @@ class DataValidationModal extends Modal {
 			void this.plugin.setColumnList(values, this.target);
 		});
 		this.ta.focus();
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
+/**
+ * Summarize: pick a column to group by, one to aggregate, and how.
+ *
+ * The two dropdowns are filled from the table's own header row, so the choice
+ * is made in the words the table uses rather than in column letters.
+ */
+class SummarizeModal extends Modal {
+	private group = 0;
+	private value = 1;
+	private fn: SummaryFn = "sum";
+
+	constructor(app: App, private plugin: PowerTablesPlugin, private target: CellTarget, private heads: string[]) {
+		super(app);
+		// a sensible opening guess: group by the first column and total the first
+		// one that holds numbers, which is what the answer usually is
+		const firstNum = this.plugin.numericColumns(target).find((c) => c !== 0);
+		if (firstNum != null) this.value = firstNum;
+	}
+
+	onOpen() {
+		this.titleEl.setText("Summarize table");
+		floatModal(this);
+		const { contentEl } = this;
+		contentEl.createEl("p", {
+			cls: "ptb-modal-desc",
+			text:
+				"Groups the rows by one column and aggregates another, writing the result as a new table below this one. " +
+				"It is a snapshot: run it again for fresh numbers.",
+		});
+		const cols = Object.fromEntries(this.heads.map((h, i) => [String(i), h || colLetter(i)]));
+		new Setting(contentEl)
+			.setName("Group by")
+			.addDropdown((d) => d.addOptions(cols).setValue(String(this.group)).onChange((v) => (this.group = Number(v))));
+		new Setting(contentEl)
+			.setName("Summarize")
+			.addDropdown((d) => d.addOptions(cols).setValue(String(this.value)).onChange((v) => (this.value = Number(v))))
+			.addDropdown((d) =>
+				d
+					.addOptions({ sum: "Sum", count: "Count", avg: "Average", min: "Min", max: "Max" })
+					.setValue(this.fn)
+					.onChange((v) => (this.fn = v as SummaryFn))
+			);
+		const btns = contentEl.createDiv({ cls: "ptb-modal-btns" });
+		btns.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		btns.createEl("button", { text: "Insert summary", cls: "mod-cta" }).addEventListener("click", () => {
+			this.close();
+			void this.plugin.summarize(this.target, this.group, this.value, this.fn);
+		});
 	}
 
 	onClose() {
