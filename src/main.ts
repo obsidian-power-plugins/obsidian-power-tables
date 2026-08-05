@@ -1597,11 +1597,12 @@ export default class PowerTablesPlugin extends Plugin {
 	/**
 	 * Hide the rows that fail any column's filter.
 	 *
-	 * Both the values offered in the dropdown and the text tested here come off
-	 * the rendered cell, deliberately: a cell holding `[[Note|Alias]]` reads as
-	 * "Alias" on screen and as its own source in the file, and a list built from
-	 * one while matching against the other would offer values that can never
-	 * match. Hidden rows stay in the DOM, so the next pass can bring them back.
+	 * The text comes off the rendered cell because that is what is already here;
+	 * filteredRows reaches the same answer from the file, for SUBTOTAL and copy,
+	 * which have no DOM to read. The two agree because both route their text
+	 * through normalizeText, which resolves a wiki link to the alias it renders
+	 * as and strips emphasis, so markdown and rendered text arrive at the same
+	 * string. Hidden rows stay in the DOM, so the next pass can bring them back.
 	 */
 	private applyFilters(table: HTMLTableElement) {
 		const head = table.rows[0];
