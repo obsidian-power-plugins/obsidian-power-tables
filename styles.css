@@ -691,9 +691,12 @@ tr.ptb-fhidden {
    content inside a block of its own and an inline ::before ahead of a block
    lands on its own line above the value. Absolute is the same answer the funnel
    and the picker chevron already use, and it holds in both views. */
-[data-ptb-icon] {
+/* Specific enough to beat the editor's own cell padding. A bare attribute
+   selector loses to it, and the icon then lands on top of the value instead of
+   in the space that was meant to be cleared for it. */
+:is(.markdown-rendered, .cm-table-widget) :is(td, th)[data-ptb-icon] {
 	position: relative;
-	padding-left: 20px;
+	padding-left: 22px;
 }
 
 [data-ptb-icon]::before {
