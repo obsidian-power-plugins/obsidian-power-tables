@@ -1558,7 +1558,6 @@ export default class PowerTablesPlugin extends Plugin {
 						tbl.querySelectorAll(".ptb-funnel").forEach((f) => f.remove());
 						tbl.querySelectorAll(".ptb-hasfunnel").forEach((c) => (c as HTMLElement).removeClass("ptb-hasfunnel"));
 						tbl.querySelectorAll("tr.ptb-fhidden").forEach((r) => (r as HTMLElement).removeClass("ptb-fhidden"));
-						tbl.removeClass("ptb-filtering");
 					}
 					return;
 				}
@@ -1622,7 +1621,6 @@ export default class PowerTablesPlugin extends Plugin {
 			}
 			row.toggleClass("ptb-fhidden", hide);
 		}
-		table.toggleClass("ptb-filtering", filters.some(Boolean));
 	}
 
 	/** Open the targeted column's filter from a command or a menu, where there is
