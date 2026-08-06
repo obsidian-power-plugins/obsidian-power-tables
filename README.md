@@ -58,7 +58,7 @@ The plugin then paints the whole `<td>` from that span, so the entire cell fills
 
 1. Open the **Power Tables sidebar**: click the **table icon** in the left ribbon (it also opens itself the first time you edit inside a table each session; you can turn that off in settings). Prefer a floating panel? Run the command *Toggle floating panel*; drag its header to park it anywhere.
 
-The panel shows a live **cell reference** (like `B3`) for the targeted cell and groups its tools into sections: **Text** (bold, italic, strikethrough, column alignment, borders), **Apply to** (Cell / Row / Column: the scope that colors, text styles, number formats, and Clear values act on), **Colors**, **Number format**, and **Data** (live calcs, totals row, sorting, insert row/column, CSV import, clipboard paste, clearing). **Right-click any table cell** for row/column operations: insert above/below/left/right, duplicate row, clear contents, delete row/column.
+The panel shows a live **cell reference** (like `B3`) for the targeted cell and groups its tools into sections: **Text** (bold, italic, strikethrough, column alignment, borders), **Apply to** (Cell / Row / Column: the scope that colors, text styles, number formats, and Clear values act on), **Colors**, **Number format**, and **Data** (live calcs, totals row, sorting, insert row/column, CSV import, clipboard paste, clearing). **Right-click any table cell** for the same tools without crossing the screen. The menu is Excel's shape: cut, copy and paste flat at the top, then flyouts for **Paste special**, **Insert**, **Delete**, **Fill**, **Filter**, **Sort**, **Format** (the number presets and the column's alignment, ticked), **View** (this table's appearance flags, ticked) and **Table** (prettify, auto-fit, widths, transpose, CSV), with *Edit value / formula…* at the foot.
 
 The table bar's two split buttons stand in for a row of them, the way Excel consolidates the same tools: **AutoSum** sums the selection or the column on click, with Average, Count, Max, Min and a way through to row totals and the formula editor on its arrow; **Format** opens the number formats (General, Number, Currency, Accounting, Short and Long date, Time, Percentage), each previewed against the targeted cell's own value so you pick by what it will look like. Only formats this plugin can actually render are listed. Markdown stays the source of truth: the date entries rewrite anything that parses as a date (`3-14-12`, `2012-03-14`, `Mar 14, 2012` …) into the chosen style. For finer control there is also a floating, draggable **Format cells…** dialog: decimal places, thousands separator, negative styles including red and accounting parentheses, currency symbols (the four presets or any symbol you type; currency symbols like ₹ stay summable, letter codes format only), and date/time formats, all previewed on the targeted cell's own value and applied at the Apply-to scope. With Apply to set to Row or Column, tick **Keep formatting** to make the format sticky: it's stored as a `data-fmt` tag on the column's header cell (or the row's first cell) and automatically re-applied as cells change and new rows or columns arrive. The cell being typed in is left alone until the cursor moves on.
 
@@ -119,7 +119,7 @@ What lands depends on what you dragged from, the way it does in a spreadsheet:
 
 Drag **up or left** and the series runs backwards. Select several columns and each fills its own series independently, so a Date column and an Amount column dragged together do not contaminate each other. The whole drag is **one edit**, so it is one undo however many cells it covered, and the source cell's colors, borders and number format travel with it.
 
-The fill writes into rows the table already has; it will not grow the table, so add rows first (right-click → *Insert row below*, or the panel's Data section) if you are filling past the end. Turn the handle off in Settings → **Fill handle**.
+The fill writes into rows the table already has; it will not grow the table, so add rows first (right-click → *Insert* › *Row below*, or the panel's Data section) if you are filling past the end. Turn the handle off in Settings → **Fill handle**.
 
 ### Copy, cut and paste cells
 
@@ -131,7 +131,7 @@ Select a block and press **Ctrl+C**, then click where it should go and press **C
 - **A selection that is a whole multiple of the block tiles it**, so one cell copied and pasted over ten fills all ten, the same as in Excel.
 - **Ctrl+C also lands in Excel.** The copy puts plain tab-separated text on the system clipboard alongside the block it keeps for itself, so the same press pastes into Excel, Sheets, or anywhere else. Going the other way, tab-separated or multi-line text pasted into a table spreads across cells from the targeted one instead of piling into it.
 
-**Paste special** (right-click → *Paste special…*, the panel's *Paste…*, or its own commands) is Excel's menu:
+**Paste special** (right-click → *Paste special*, the panel's *Paste…*, or its own commands) is Excel's menu:
 
 | | |
 | --- | --- |
@@ -164,6 +164,8 @@ Turn it on (Settings → **AutoFilter**, or the panel's **View → Filter** for 
 - **Conditions**: contains, begins with, ends with, equals, greater than, less than, between (`10 ~ 20`), is empty, is not empty. They are the same operators the conditional color rules use, so they mean there what they mean here.
 - **Clear** takes the filter off the column; *Clear all filters in this table* (command palette, or the panel's Data section) takes off every one.
 
+The right-click menu's **Filter** flyout is the shortcut to the same thing: *Filter by this cell's value* is Excel's one-click filter (it keeps the rows whose cell in this column reads the same as the one you clicked, matching on what the cell reads as rather than how it is stored, so a bolded or linked cell filters like any other), *Filter column…* opens the dropdown above, and *Clear filters* takes every filter off the table.
+
 Changes land on **OK**, not on every tick, because the filter is stored in the note and a write per checkbox would be exactly that.
 
 **A funnel in the accent color means that column is filtering.** It is the only sign on screen that rows are missing, so it is worth knowing. Columns combine with AND: a row has to pass every filter to stay.
@@ -182,14 +184,14 @@ Row numbers in the guides skip where rows are hidden, the way a spreadsheet's do
 
 - **Checkboxes**: the ☑ button in the Text row adds `[ ]` to the cell (follows Apply to, so a column of todos is one click). Cells starting with `[ ]` / `[x]` render as **real checkboxes**: tick them in Reading view (or unfocused Live Preview cells) and the markdown updates itself. The markdown stays a plain `[x] Buy milk`.
 - **Text highlight**: the Colors section has a third mode, **Fill | Text | Highlight**. Highlight paints just the data inside the cell (rounded, like a text highlighter) instead of flooding the whole cell; it's stored as the same span with a `ptb-hl` marker class.
-- **Column widths**: hover the right edge of any **header cell** and drag (the cursor changes). This works in Reading view and Live Preview. The width is saved as `data-w` on that column's header cell, so it survives sorting and column moves and degrades to nothing without the plugin. Right-click → *Reset column width* to clear it. **Phones ignore stored widths** so columns can shrink and text can wrap to fit the screen; tablets and desktops apply them.
+- **Column widths**: hover the right edge of any **header cell** and drag (the cursor changes). This works in Reading view and Live Preview. The width is saved as `data-w` on that column's header cell, so it survives sorting and column moves and degrades to nothing without the plugin. Right-click → *Table* › *Reset column width* to clear it. **Phones ignore stored widths** so columns can shrink and text can wrap to fit the screen; tablets and desktops apply them.
 - **Auto-fit column widths**: the panel's **Auto-fit** button (also in the right-click menu and the command palette) measures the rendered table and sizes every column to its widest entry, the smallest width that still shows all the data. **Double-click** a header cell's right edge to auto-fit just that column, like Excel. The results are stored as the same `data-w` tags a drag would write.
 
 ### Live calculations
 
 The **Σ Calc** button turns the targeted cell into a **live calculation** over its column or row (Sum, Average, Min, Max, or Count):
 
-1. Add a "Total" row if you don't have one (right-click the table → Insert row below), or skip the manual steps entirely: the panel's **Totals row** button (or the *Insert totals row* command) appends one with a label and a live sum under every numeric column.
+1. Add a "Total" row if you don't have one (right-click the table → *Insert* › *Row below*), or skip the manual steps entirely: the panel's **Totals row** button (or the *Insert totals row* command) appends one with a label and a live sum under every numeric column.
 2. Put the cursor in (or click) the cell where the result should go.
 3. Click **Σ Calc** and pick a function. From then on the value **recalculates automatically** whenever the note changes (shortly after you stop typing, on file open, and on external edits/sync). Live cells show a subtle dotted underline. Picking a different function on a live cell switches it; picking the same one (or **Freeze value**) turns it back into plain text.
 

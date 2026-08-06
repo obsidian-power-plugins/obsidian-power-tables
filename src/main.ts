@@ -4,6 +4,7 @@ import {
 	ItemView,
 	MarkdownView,
 	Menu,
+	type MenuItem,
 	Modal,
 	Notice,
 	Platform,
@@ -94,6 +95,7 @@ import {
 	filterHit,
 	fltSafe,
 	fltValue,
+	FLT_BLANK,
 	clipFromRows,
 	clipToTsv,
 	CellClip,
@@ -190,6 +192,34 @@ type WidgetTable = {
 	selectCells?: (anchor: unknown, head: unknown) => void;
 	receiveCellFocus?: (row: number, col: number) => void;
 };
+
+/**
+ * A menu item that can grow a flyout.
+ *
+ * setSubmenu() is how Obsidian builds its own Row and Column flyouts in the
+ * table context menu, but it is missing from the published typings, so it is
+ * described here rather than reached for through `any`. Optional, because
+ * anything that ever loses it has to keep working: see flyout().
+ */
+type FlyoutItem = MenuItem & { setSubmenu?: () => Menu };
+
+/** The three column alignments, shared by the panel's align button and the
+ *  right-click menu's Format flyout. */
+const ALIGNMENTS: [ColAlign, string, string][] = [
+	["left", "Align left", "align-left"],
+	["center", "Align center", "align-center"],
+	["right", "Align right", "align-right"],
+];
+
+/** Paste special, in one list: the right-click flyout, the panel's Data menu
+ *  and the paste-mode menu all offer the same five. */
+const PASTE_SPECIAL: [string, string, PasteMode, boolean][] = [
+	["All", "clipboard-paste", "all", false],
+	["Values", "hash", "values", false],
+	["Formulas", "function-square", "formulas", false],
+	["Formats", "paintbrush", "formats", false],
+	["Transpose", "flip-horizontal-2", "all", true],
+];
 
 const VIEW_TYPE_PT = "power-tables-view";
 
@@ -2284,8 +2314,8 @@ export default class PowerTablesPlugin extends Plugin {
 				void this.withCell(cell, () => this.sortTable(dir));
 			});
 		};
-		sortBtn("Sort A→Z", "arrow-down-a-z", "asc");
-		sortBtn("Sort Z→A", "arrow-up-a-z", "desc");
+		sortBtn("Sort A→Z", "arrow-down-az", "asc");
+		sortBtn("Sort Z→A", "arrow-down-za", "desc");
 
 		// Every distinct value in the column, with how many rows hold it, taken
 		// from the rendered cells so the list says what the screen says.
@@ -2716,44 +2746,203 @@ export default class PowerTablesPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Add one flyout to a menu, or the next best thing.
+	 *
+	 * Obsidian grows a flyout through MenuItem.setSubmenu(), which its own table
+	 * Row and Column menus use, but which is not in the published typings. An
+	 * Obsidian that ever stops offering it must not take these actions down with
+	 * it, so the parent turns into a heading and its items follow inline: the
+	 * flat menu this replaced, which was never wrong, only long.
+	 */
+	private flyout(menu: Menu, title: string, icon: string, fill: (sub: Menu) => void) {
+		let sub: Menu | null = null;
+		menu.addItem((i) => {
+			i.setTitle(title).setIcon(icon);
+			const make = (i as FlyoutItem).setSubmenu;
+			if (typeof make === "function") sub = make.call(i);
+			else i.setIsLabel(true);
+		});
+		fill(sub ?? menu);
+	}
+
+	/**
+	 * The cell a menu is being built for, resolved once.
+	 *
+	 * A menu is built in one pass and then sits on screen, so the ticks it
+	 * carries are read here rather than by each item asking again. The clicked
+	 * cell wins where there is one: see withCell for why the live reading is the
+	 * wrong cell for a menu raised over a link.
+	 */
+	private menuTarget(cell: HTMLTableCellElement | null): CellTarget | null {
+		const clicked = cell ? this.targetFromCell(cell) : null;
+		if (clicked) return { ...clicked, editor: this.editorForPath(clicked.path), fromCursor: false };
+		return this.resolveTarget(true);
+	}
+
+	/**
+	 * The right-click menu, Excel's shape: the everyday actions flat at the top,
+	 * everything else behind a flyout.
+	 *
+	 * Excel puts thirty-odd actions in this menu and still fits on a laptop
+	 * screen, because only a handful of them are ever a single click deep. The
+	 * same list flat was eighteen rows and had no room to grow; grouped, it is
+	 * eleven rows and reaches most of what the panel can do.
+	 *
+	 * In Live Preview this rides on Obsidian's own editor menu, which already
+	 * carries Row and Column flyouts of its own. Insert and Delete stay anyway:
+	 * Obsidian drops those two flyouts as soon as several cells are selected,
+	 * and a menu that loses its insert and delete exactly when you have selected
+	 * something to act on is worse than a menu that repeats itself.
+	 */
 	private addStructureItems(menu: Menu, cell: HTMLTableCellElement | null = null) {
 		const run = (fn: () => unknown) => void this.withCell(cell, fn);
+		// One read of the file for every tick in this menu: the appearance flags
+		// and the column's alignment both come off these lines.
+		const t = this.menuTarget(cell);
+		const ed = t ? t.editor ?? this.editorForPath(t.path) : null;
+		const lines = ed ? ed.getValue().split("\n") : null;
+		const flags = lines && t ? tableFlagsAt(lines, t) : {};
+		const align = lines && t ? columnAlign(lines, t) : null;
+
 		menu.addItem((i) => i.setTitle("Copy cells").setIcon("copy").onClick(() => run(() => this.copyCells())));
 		menu.addItem((i) => i.setTitle("Cut cells").setIcon("scissors").onClick(() => run(() => this.copyCells(true))));
 		menu.addItem((i) => i.setTitle("Paste cells").setIcon("clipboard-paste").onClick(() => run(() => this.pasteCells())));
-		menu.addItem((i) =>
-			i.setTitle("Paste special…").setIcon("clipboard-list").onClick((e) => this.showPasteMenu(e as MouseEvent, cell))
-		);
+		this.flyout(menu, "Paste special", "clipboard-list", (sub) => this.addPasteItems(sub, run));
+
 		menu.addSeparator();
-		menu.addItem((i) => i.setTitle("Insert row above").setIcon("arrow-up").onClick(() => run(() => this.insertRow("above"))));
-		menu.addItem((i) => i.setTitle("Insert row below").setIcon("arrow-down").onClick(() => run(() => this.insertRow("below"))));
-		menu.addItem((i) => i.setTitle("Insert column left").setIcon("arrow-left").onClick(() => run(() => this.insertColumn("left"))));
-		menu.addItem((i) =>
-			i.setTitle("Insert column right").setIcon("arrow-right").onClick(() => run(() => this.insertColumn("right")))
-		);
-		menu.addItem((i) => i.setTitle("Duplicate row").setIcon("copy").onClick(() => run(() => this.duplicateRow())));
-		menu.addItem((i) =>
-			i.setTitle("Fill down").setIcon("arrow-down-to-line").onClick(() => run(() => this.fill("down")))
-		);
-		menu.addItem((i) =>
-			i.setTitle("Fill right").setIcon("arrow-right-to-line").onClick(() => run(() => this.fill("right")))
-		);
+		this.flyout(menu, "Insert", "plus", (sub) => {
+			sub.addItem((i) => i.setTitle("Row above").setIcon("arrow-up").onClick(() => run(() => this.insertRow("above"))));
+			sub.addItem((i) => i.setTitle("Row below").setIcon("arrow-down").onClick(() => run(() => this.insertRow("below"))));
+			sub.addItem((i) =>
+				i.setTitle("Column left").setIcon("arrow-left").onClick(() => run(() => this.insertColumn("left")))
+			);
+			sub.addItem((i) =>
+				i.setTitle("Column right").setIcon("arrow-right").onClick(() => run(() => this.insertColumn("right")))
+			);
+			sub.addSeparator();
+			sub.addItem((i) => i.setTitle("Duplicate row").setIcon("copy").onClick(() => run(() => this.duplicateRow())));
+			sub.addItem((i) => i.setTitle("Totals row").setIcon("sigma").onClick(() => run(() => this.insertTotalsRow())));
+		});
+		this.flyout(menu, "Delete", "trash", (sub) => {
+			sub.addItem((i) => i.setTitle("Row").setIcon("trash").onClick(() => run(() => this.deleteRow())));
+			sub.addItem((i) => i.setTitle("Column").setIcon("trash-2").onClick(() => run(() => this.deleteColumn())));
+			sub.addSeparator();
+			sub.addItem((i) =>
+				i.setTitle("Clear cell contents").setIcon("eraser").onClick(() => run(() => this.clearContents(null)))
+			);
+		});
+		this.flyout(menu, "Fill", "arrow-down-to-line", (sub) => {
+			sub.addItem((i) => i.setTitle("Down").setIcon("arrow-down-to-line").onClick(() => run(() => this.fill("down"))));
+			sub.addItem((i) => i.setTitle("Right").setIcon("arrow-right-to-line").onClick(() => run(() => this.fill("right"))));
+		});
+
+		menu.addSeparator();
+		this.flyout(menu, "Filter", "list-filter", (sub) => {
+			sub.addItem((i) =>
+				i
+					.setTitle("Filter by this cell's value")
+					.setIcon("filter")
+					.onClick(() => run(() => this.filterByCellValue()))
+			);
+			sub.addItem((i) =>
+				i.setTitle("Filter column…").setIcon("list-filter").onClick(() => run(() => this.openFilterForTarget()))
+			);
+			sub.addSeparator();
+			sub.addItem((i) => i.setTitle("Clear filters").setIcon("filter-x").onClick(() => run(() => this.clearFilters())));
+		});
+		this.flyout(menu, "Sort", "arrow-down-az", (sub) => {
+			sub.addItem((i) => i.setTitle("Sort A→Z").setIcon("arrow-down-az").onClick(() => run(() => this.sortTable("asc"))));
+			sub.addItem((i) => i.setTitle("Sort Z→A").setIcon("arrow-down-za").onClick(() => run(() => this.sortTable("desc"))));
+			sub.addSeparator();
+			sub.addItem((i) => i.setTitle("Move row up").setIcon("arrow-up").onClick(() => run(() => this.moveRow(-1))));
+			sub.addItem((i) => i.setTitle("Move row down").setIcon("arrow-down").onClick(() => run(() => this.moveRow(1))));
+			sub.addItem((i) => i.setTitle("Move column left").setIcon("arrow-left").onClick(() => run(() => this.moveColumn(-1))));
+			sub.addItem((i) =>
+				i.setTitle("Move column right").setIcon("arrow-right").onClick(() => run(() => this.moveColumn(1)))
+			);
+		});
+
+		menu.addSeparator();
+		this.flyout(menu, "Format", "hash", (sub) => {
+			this.addNumberFormatItems(sub, run, this.currentCellRaw(t) ?? "");
+			sub.addSeparator();
+			for (const [a, label, icon] of ALIGNMENTS) {
+				sub.addItem((i) =>
+					i
+						.setTitle(label)
+						.setIcon(icon)
+						.setChecked(align === a)
+						.onClick(() => run(() => this.alignColumn(a)))
+				);
+			}
+			sub.addSeparator();
+			sub.addItem((i) =>
+				i.setTitle("More number formats…").setIcon("settings-2").onClick(() => run(() => this.openFormatModal()))
+			);
+			sub.addItem((i) => i.setTitle("Color rules…").setIcon("wand-2").onClick(() => run(() => this.openRulesModal())));
+		});
+		this.flyout(menu, "View", "eye", (sub) => this.addViewItems(sub, flags, run));
+		this.flyout(menu, "Table", "table", (sub) => {
+			sub.addItem((i) =>
+				i.setTitle("Prettify table").setIcon("align-justify").onClick(() => run(() => this.prettifyTable()))
+			);
+			sub.addItem((i) =>
+				i
+					.setTitle("Auto-fit column widths")
+					.setIcon("chevrons-right-left")
+					.onClick(() => run(() => this.autoFitColumnWidths()))
+			);
+			sub.addItem((i) =>
+				i.setTitle("Reset column width").setIcon("move-horizontal").onClick(() => run(() => this.resetColumnWidth()))
+			);
+			sub.addSeparator();
+			sub.addItem((i) =>
+				i.setTitle("Transpose table").setIcon("flip-horizontal-2").onClick(() => run(() => this.transposeTable()))
+			);
+			sub.addItem((i) => i.setTitle("Copy as CSV").setIcon("copy").onClick(() => run(() => this.copyTableCsv())));
+		});
+
+		menu.addSeparator();
 		menu.addItem((i) =>
 			i.setTitle("Edit value / formula…").setIcon("function-square").onClick(() => run(() => this.openFormulaModal()))
 		);
-		menu.addItem((i) => i.setTitle("Clear cell contents").setIcon("eraser").onClick(() => run(() => this.clearContents(null))));
-		menu.addItem((i) =>
-			i.setTitle("Auto-fit column widths").setIcon("chevrons-right-left").onClick(() => run(() => this.autoFitColumnWidths()))
-		);
-		menu.addItem((i) =>
-			i.setTitle("Reset column width").setIcon("move-horizontal").onClick(() => run(() => this.resetColumnWidth()))
-		);
-		menu.addItem((i) =>
-			i.setTitle("Prettify table").setIcon("align-justify").onClick(() => run(() => this.prettifyTable()))
-		);
-		menu.addSeparator();
-		menu.addItem((i) => i.setTitle("Delete row").setIcon("trash").onClick(() => run(() => this.deleteRow())));
-		menu.addItem((i) => i.setTitle("Delete column").setIcon("trash-2").onClick(() => run(() => this.deleteColumn())));
+	}
+
+	/**
+	 * Excel's "Filter by Selected Cell's Value": keep the rows whose cell in this
+	 * column reads the same as this one.
+	 *
+	 * The value is taken from the markdown and normalized exactly as filterHit
+	 * normalizes what it matches against, so a bolded, linked or colored cell
+	 * filters by what it reads as rather than by how it is stored.
+	 *
+	 * A table with AutoFilter off gets it turned on, which is what Excel does
+	 * when you filter a range that was not filtered before. It is also the only
+	 * honest outcome: nothing draws the funnels or hides the rows while the flag
+	 * is off, but SUBTOTAL and copy read the stored filter regardless, so the
+	 * alternative is a filter that changes the arithmetic and nothing on screen.
+	 */
+	private async filterByCellValue(target?: CellTarget | null) {
+		const t = target ?? this.resolveTarget();
+		if (!t) return;
+		const ed = t.editor ?? this.editorForPath(t.path);
+		if (!ed) return;
+		const lines = ed.getValue().split("\n");
+		const ln = locateLine(lines, t);
+		const row = ln == null ? null : parseRow(lines[ln]);
+		if (!row || row.isDelim) {
+			this.cantLocate();
+			return;
+		}
+		const col = Math.min(t.col, row.cellCount - 1);
+		const inner = parseCellContent(row.pieces[col + 1]).inner;
+		const value = fltValue(normalizeText(inner).trim());
+		// each runPlan re-reads the note, so the flag's edit is already in the
+		// lines the filter's own edit is planned against
+		if (!(tableFlagsAt(lines, t).filters ?? this.settings.filterRow)) await this.toggleTableFlag("filters");
+		const plan = await this.runPlan(t, (ls) => planSetColumnFilter(ls, t, { op: "in", value }));
+		if (plan) new Notice(`Filtering ${colLetter(col)} by ${value === FLT_BLANK ? "(blank)" : value}.`);
 	}
 
 	private setOutline(el: HTMLElement | null) {
@@ -4130,24 +4319,22 @@ export default class PowerTablesPlugin extends Plugin {
 	/** Excel's Paste Special menu. The cell is threaded through because this
 	 *  menu is raised from another one, by which point the right-clicked cell is
 	 *  no longer whatever happens to be focused. */
-	showPasteMenu(evt: MouseEvent, cell: HTMLTableCellElement | null = null) {
-		const menu = new Menu();
-		menu.addItem((i) => i.setTitle("Paste special").setIsLabel(true));
-		const items: [string, string, PasteMode, boolean][] = [
-			["All", "clipboard-paste", "all", false],
-			["Values", "hash", "values", false],
-			["Formulas", "function-square", "formulas", false],
-			["Formats", "paintbrush", "formats", false],
-			["Transpose", "flip-horizontal-2", "all", true],
-		];
-		for (const [label, icon, mode, transpose] of items) {
+	/** The five paste modes, for a menu of their own or a flyout inside one. */
+	private addPasteItems(menu: Menu, run: (fn: () => unknown) => void) {
+		for (const [label, icon, mode, transpose] of PASTE_SPECIAL) {
 			menu.addItem((i) =>
 				i
 					.setTitle(label)
 					.setIcon(icon)
-					.onClick(() => void this.withCell(cell, () => this.pasteCells(mode, transpose)))
+					.onClick(() => run(() => this.pasteCells(mode, transpose)))
 			);
 		}
+	}
+
+	showPasteMenu(evt: MouseEvent, cell: HTMLTableCellElement | null = null) {
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Paste special").setIsLabel(true));
+		this.addPasteItems(menu, (fn) => void this.withCell(cell, fn));
 		menu.showAtPosition(this.menuAnchor(evt));
 	}
 
@@ -4298,13 +4485,8 @@ export default class PowerTablesPlugin extends Plugin {
 	 *  renders that left, but it is not the same source as left. */
 	showAlignMenu(evt: MouseEvent) {
 		const cur = this.currentColumnAlign();
-		const defs: [ColAlign, string, string][] = [
-			["left", "Align left", "align-left"],
-			["center", "Align center", "align-center"],
-			["right", "Align right", "align-right"],
-		];
 		const menu = new Menu();
-		for (const [align, label, icon] of defs) {
+		for (const [align, label, icon] of ALIGNMENTS) {
 			menu.addItem((i) =>
 				i
 					.setTitle(label)
@@ -4334,8 +4516,8 @@ export default class PowerTablesPlugin extends Plugin {
 			["Insert row below", "plus", () => void this.insertRow("below")],
 			["Insert column right", "plus", () => void this.insertColumn("right")],
 			["Totals row", "sigma", () => void this.insertTotalsRow()],
-			["Sort A→Z", "arrow-down-a-z", () => void this.sortTable("asc")],
-			["Sort Z→A", "arrow-up-a-z", () => void this.sortTable("desc")],
+			["Sort A→Z", "arrow-down-az", () => void this.sortTable("asc")],
+			["Sort Z→A", "arrow-down-za", () => void this.sortTable("desc")],
 			["Prettify", "align-justify", () => void this.prettifyTable()],
 			["Auto-fit columns", "chevrons-right-left", () => void this.autoFitColumnWidths()],
 		];
@@ -4391,6 +4573,21 @@ export default class PowerTablesPlugin extends Plugin {
 		const at = this.menuAnchor(evt);
 		const t = this.resolveTarget(true);
 		const flags = await this.tableFlags(t);
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("This table").setIsLabel(true));
+		this.addViewItems(menu, flags, (fn) => void fn());
+		menu.showAtPosition(at);
+	}
+
+	/** The six appearance flags, ticked from this table's own overrides where it
+	 *  has them and from the global setting where it does not. The panel's View
+	 *  button reads the flags from the file; the right-click flyout, which has to
+	 *  be built in one synchronous pass, reads them from the open editor. */
+	private addViewItems(
+		menu: Menu,
+		flags: Partial<Record<TableFlag, boolean>>,
+		run: (fn: () => unknown) => void
+	) {
 		const s = this.settings;
 		const globals: Record<TableFlag, boolean> = {
 			guides: s.cellRefs,
@@ -4408,18 +4605,15 @@ export default class PowerTablesPlugin extends Plugin {
 			["sticky", "Sticky header"],
 			["filters", "AutoFilter"],
 		];
-		const menu = new Menu();
-		menu.addItem((i) => i.setTitle("This table").setIsLabel(true));
 		for (const [f, label] of defs) {
 			const set = flags[f] !== undefined;
 			menu.addItem((i) =>
 				i
 					.setTitle(set ? `${label} (set on this table)` : label)
 					.setChecked(flags[f] ?? globals[f])
-					.onClick(() => void this.toggleTableFlag(f))
+					.onClick(() => run(() => this.toggleTableFlag(f)))
 			);
 		}
-		menu.showAtPosition(at);
 	}
 
 	showAutoSumMenu(evt: MouseEvent, at?: { x: number; y: number }) {
@@ -4454,7 +4648,19 @@ export default class PowerTablesPlugin extends Plugin {
 	 * entries that would sit there doing nothing.
 	 */
 	showNumberFormatMenu(evt: MouseEvent, at?: { x: number; y: number }) {
-		const raw = this.currentCellRaw() ?? "";
+		const menu = new Menu();
+		menu.addItem((i) => i.setTitle("Number format").setIsLabel(true));
+		this.addNumberFormatItems(menu, (fn) => void fn(), this.currentCellRaw() ?? "");
+		menu.addSeparator();
+		menu.addItem((i) =>
+			i.setTitle("More number formats…").setIcon("settings-2").onClick(() => this.openFormatModal())
+		);
+		menu.showAtPosition(at ?? this.menuAnchor(evt));
+	}
+
+	/** The eight presets, previewed against `raw`, for the panel's Format button
+	 *  or the right-click menu's Format flyout. */
+	private addNumberFormatItems(menu: Menu, run: (fn: () => unknown) => void, raw: string) {
 		const n = parseNumeric(raw);
 		const sample = n ? n.value : 45;
 		const presets: [string, string, FmtSpec | null][] = [
@@ -4467,8 +4673,6 @@ export default class PowerTablesPlugin extends Plugin {
 			["Time", "clock", { ...FMT_DEFAULTS, kind: "time", timePattern: "h12s" }],
 			["Percentage", "percent", { ...FMT_DEFAULTS, kind: "percent" }],
 		];
-		const menu = new Menu();
-		menu.addItem((i) => i.setTitle("Number format").setIsLabel(true));
 		for (const [label, icon, spec] of presets) {
 			// dates and times preview off the cell's own text, numbers off its value
 			let preview = "";
@@ -4479,17 +4683,9 @@ export default class PowerTablesPlugin extends Plugin {
 				i
 					.setTitle(preview ? `${label}    ${preview}` : label)
 					.setIcon(icon)
-					.onClick(() => {
-					if (spec) void this.applyFormat(spec, false);
-					else void this.formatNumber("auto", null);
-				})
+					.onClick(() => run(() => (spec ? this.applyFormat(spec, false) : this.formatNumber("auto", null))))
 			);
 		}
-		menu.addSeparator();
-		menu.addItem((i) =>
-			i.setTitle("More number formats…").setIcon("settings-2").onClick(() => this.openFormatModal())
-		);
-		menu.showAtPosition(at ?? this.menuAnchor(evt));
 	}
 
 	showCalcMenu(evt: MouseEvent, at?: { x: number; y: number }) {
