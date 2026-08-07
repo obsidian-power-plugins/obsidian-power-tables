@@ -1,41 +1,28 @@
 # Power Tables
 
-Excel-grade power tools for Markdown tables in Obsidian: **cell fill and text colors** from a floating toolbar, **live calculations** (sum, average, min, max, count) that recalculate as you type, and **smart sorting** that understands numbers, currency, and dates, all while your tables stay **plain Markdown**.
+Spreadsheet powers for the tables in your notes: **cell colors**, **live formulas** that recalculate as you type, **sorting**, **filtering**, and Excel's own keyboard shortcuts. Your tables stay **plain Markdown**, so notes keep working everywhere, with or without this plugin.
 
 ![A budget table with red and green cell fills on the variance column, currency formatting, Excel-style row numbers and column letters, and a totals row of live sums, with the Power Tables panel open beside it showing the formula bar reading =SUM(D2:D11)](docs/images/power-tables.png)
 
-[![Buy me a coffee](docs/images/buy-me-a-coffee.png)](https://buymeacoffee.com/powerplugins)
+**New here?** Run the command **Insert demo table** to see most of this working in ten seconds.
 
-Fills mark the two overspends and the two largest savings, the figures carry
-currency formatting, and the Total row is live: the formula bar shows the
-selected cell is `=SUM(D2:D11)`, and 54,080.00 minus 53,535.00 is the 545.00 in
-the variance column. Everything on the left is still plain Markdown in the file.
+## What you get
 
-## Features at a glance
+- **Colors**: cell fills, text colors, and highlights, from an Office-style palette. Plus conditional rules, color scales, data bars, and icon sets.
+- **Formulas**: 49 Excel functions including `XLOOKUP`, `SUMIFS`, `INDEX`/`MATCH`, and `IFS`, with a formula bar that completes function names and takes references by clicking cells.
+- **Live totals** that recalculate whenever the note changes.
+- **The fill handle**: drag the corner of a selection to fill dates, numbers, times, weekdays, and formulas, with a label showing what will land.
+- **Copy, cut, and paste blocks of cells** with Ctrl+C/X/V, formulas and formatting included, plus paste special.
+- **Excel's selection keys**: Shift+arrows to extend, Ctrl+arrows to the edge of the data, Ctrl+Space for the column.
+- **Sorting** that understands numbers, currency, and dates, plus row and column moves.
+- **AutoFilter**: a funnel on every column header, stored in the note so a filtered view is still there tomorrow.
+- **Number formats**: currency, percent, dates, times, and accounting negatives, which can be made sticky on a whole column.
+- **Data validation**: give a column its list of values and every cell gets a picker.
+- **Sparklines**: `=SPARKLINE(B2:G2)` draws a row as block characters, stored as text so it survives anywhere the note goes.
+- **Cleanup tools**: remove duplicate rows, text to columns, transpose, find and replace, and a Summarize that groups and totals into a new table.
+- **Import and export** from Excel and CSV.
 
-- Cell fill, text color, and text-highlight modes; conditional color rules, one-shot or kept live on a column; color scales, data bars and icon sets
-- Live totals and Excel-style formulas: 49 functions including `XLOOKUP`, `SUMIFS`/`COUNTIFS`, `INDEX`/`MATCH`, `IFS`, and the text and date families, with `^ & %` operators, a formula bar, and AutoSum over a drag selection
-- References that survive editing: insert, delete, move, sort, or duplicate rows and columns and every formula is rewritten to keep meaning what it meant
-- Excel's fill handle: drag the corner of the selection to fill dates, numbers, times, weekdays and formulas, with a live label showing what will land
-- Copy, cut and paste a block of cells with Ctrl+C/X/V, formulas and formatting included, plus paste special: values, formulas, formats, transpose
-- Excel's selection keys: Shift+arrows to extend, Ctrl+arrows to the edge of the data, Ctrl+Space and Shift+Space for the column and the row, without taking the keys typing needs
-- Fill down and fill right over a selection, with `$B$2` anchoring to pin what shouldn't travel
-- A formula bar that completes function names and takes references by clicking cells, and Excel's error values (`#VALUE!` `#NAME?` `#REF!` `#N/A` `#DIV/0!`) so a broken formula says what broke
-- A selection bar whenever you drag-select cells: column alignment right there, plus Sum, Avg, Count and one-click AutoSum when the cells are numbers
-- Sorting that understands numbers, currency, and dates; row and column moves; insert, delete, duplicate
-- Number, currency, percent, date, and time formats, including sticky column/row formats
-- Checkboxes in cells, drag-resizable and auto-fit column widths, cell borders, bold/italic/strike, alignment
-- Data validation: give a column its list of values and every cell gets a picker, so a status column is a click
-- Sparklines: `=SPARKLINE(B2:G2)` draws a row as block characters, stored as text so it survives anywhere the note goes
-- Cleanup commands: remove duplicate rows, text to columns, transpose, and find and replace within one table
-- Summarize: group by one column, aggregate another, and get the answer as a plain Markdown table everything else still works on
-- Excel's AutoFilter: a funnel on every column header, ticking values or taking a condition, stored in the note so a filtered view is still there tomorrow
-- CSV/Excel import and export, table prettifier, Excel-style cell reference guides that select the column or row they label
-- Everything stored as plain Markdown: notes stay portable and degrade gracefully without the plugin
-
-New here? Run the command **Insert demo table** to see most of this working in ten seconds.
-
-## How it stores colors
+## How it stores everything
 
 The plugin never converts your table to HTML. It wraps the *content* of a cell in one inline span, which Obsidian renders natively:
 
@@ -45,319 +32,106 @@ The plugin never converts your table to HTML. It wraps the *content* of a cell i
 | Queen    | <span class="ptb" style="background:#0F0">$19.60</span> |
 ```
 
-While editing in Live Preview the wrapper is invisible (and so are whole-value `**bold**` / `*italic*` / `~~strike~~` markers), so the focused cell shows just the value, still painted with its colors. Turn this off with the "Hide cell markup while editing" setting. Source mode always shows the raw markup.
+While you are editing, that wrapper is invisible, so the cell shows just its value, still painted. If you ever uninstall the plugin, your notes still open fine everywhere: colors degrade to a simple text highlight and everything else is plain text.
 
-The plugin then paints the whole `<td>` from that span, so the entire cell fills with color (not just the text) in both Reading view and Live Preview. If you ever uninstall the plugin, notes still open fine everywhere; the colors degrade to a simple text highlight, and "Clear" (or deleting the span) restores a plain cell.
+Widths, color rules, filters, and value lists are stored the same way, on the column's header cell, so they travel with the file and survive sorting and column moves.
 
-## Install (manual)
+## Using it
 
-1. Copy `manifest.json`, `main.js`, and `styles.css` into `<your vault>/.obsidian/plugins/powertables/`.
-2. In Obsidian: **Settings → Community plugins** → turn off Restricted mode if prompted → reload plugins (or restart Obsidian / Ctrl+R) → enable **Power Tables**.
+Open the **Power Tables sidebar** from the ribbon, or right-click any cell for the same tools without crossing the screen. The right-click menu follows Excel's shape: cut, copy, and paste at the top, then flyouts for paste special, insert, delete, fill, filter, sort, format, and table tools.
 
-## Use
+Target a cell by putting your cursor in it, or clicking it in Reading view. **Drag-select several** and everything applies to all of them, with a selection bar showing Sum, Avg, and Count plus a one-click AutoSum when the cells are numbers.
 
-1. Open the **Power Tables sidebar**: click the **table icon** in the left ribbon (it also opens itself the first time you edit inside a table each session; you can turn that off in settings). Prefer a floating panel? Run the command *Toggle floating panel*; drag its header to park it anywhere.
+**Apply to** switches whether colors and formats hit the cell, the row, or the whole column. Hold Shift or Ctrl for a one-off.
 
-The panel shows a live **cell reference** (like `B3`) for the targeted cell and groups its tools into sections: **Text** (bold, italic, strikethrough, column alignment, borders), **Apply to** (Cell / Row / Column: the scope that colors, text styles, number formats, and Clear values act on), **Colors**, **Number format**, and **Data** (live calcs, totals row, sorting, insert row/column, CSV import, clipboard paste, clearing). **Right-click any table cell** for the same tools without crossing the screen. The menu is Excel's shape: cut, copy and paste flat at the top, then flyouts for **Paste special**, **Insert**, **Delete**, **Fill**, **Filter**, **Sort**, **Format** (the number presets and the column's alignment, ticked), **View** (this table's appearance flags, ticked) and **Table** (prettify, auto-fit, widths, transpose, CSV), with *Edit value / formula…* at the foot.
+### Selecting like a spreadsheet
 
-The table bar's two split buttons stand in for a row of them, the way Excel consolidates the same tools: **AutoSum** sums the selection or the column on click, with Average, Count, Max, Min and a way through to row totals and the formula editor on its arrow; **Format** opens the number formats (General, Number, Currency, Accounting, Short and Long date, Time, Percentage), each previewed against the targeted cell's own value so you pick by what it will look like. Only formats this plugin can actually render are listed. Markdown stays the source of truth: the date entries rewrite anything that parses as a date (`3-14-12`, `2012-03-14`, `Mar 14, 2012` …) into the chosen style. For finer control there is also a floating, draggable **Format cells…** dialog: decimal places, thousands separator, negative styles including red and accounting parentheses, currency symbols (the four presets or any symbol you type; currency symbols like ₹ stay summable, letter codes format only), and date/time formats, all previewed on the targeted cell's own value and applied at the Apply-to scope. With Apply to set to Row or Column, tick **Keep formatting** to make the format sticky: it's stored as a `data-fmt` tag on the column's header cell (or the row's first cell) and automatically re-applied as cells change and new rows or columns arrive. The cell being typed in is left alone until the cursor moves on.
+Column letters and row numbers sit around every table, and they are the selection handles: press a letter for the column, a number for the row, or the corner box for the whole table.
 
-2. Target a cell:
-   - **Editing view (Live Preview or Source):** just put the cursor in the cell.
-   - **Reading view:** click the cell and it gets an accent outline.
-   - **Drag-select several cells** (Live Preview): colors, bold/italic/strike, alignment, borders, number formats, and Clear values apply to **every selected cell** (modifier keys still override per click). A **selection bar** appears while the selection is live, carrying the three column-alignment buttons so you never have to cross the screen for them, and Sum, Avg, Count with a one-click `Σ Insert` when the cells hold numbers.
-3. Pick what you're coloring with the **Cell fill / Text** toggle (the small bar under each shows its current color), then click a color:
-   - The palette is Office-style: a **Theme colors** row with auto-generated tints and shades below each color, plus the classic **Standard colors** row.
-   - Set **Apply to** to Row or Column to make every color, text style, number format, and Clear values click act on the whole row/column, or hold **Shift** (row) / **Ctrl** (column) for a one-off.
-   - **No color** clears that property; **More colors…** opens a full color picker (click it again to close).
-   - **Clear table** removes every color from the table under the cursor / last clicked cell.
-4. **Borders** (the ▢ button in the Text row) work like Excel's menu at the Apply-to selection: bottom/top/left/right edge, **All borders**, **Outside** or **Thick outside** borders around the cell, row, or column, and **No border** to clear. Excel's stacked presets are there too: thick bottom, double bottom, and top-and-bottom in thin, thick or double. **Draw Borders** arms a pen: *Draw border* lays an edge on whichever side of a cell you drag nearest, *Draw border grid* boxes every cell you cross, *Erase border* strips them, and the whole drag commits as one edit rather than one per cell. *Line style* picks thin, thick, double, dashed or dotted; *Line color* picks from seven named colors (names rather than arbitrary hex, because the edges are painted by CSS off the stored attribute and a fixed set keeps the note portable). Esc, or the same menu entry again, puts the pen down. Edges are stored in the cell's wrapper (`data-b="tblr"`, uppercase = thick, `=` ahead of a letter for double, so `t=b` is a thin top over a double bottom) and painted by the plugin's CSS, so the table stays plain Markdown and degrades cleanly without the plugin.
+From the keyboard, the keys are Excel's: **Shift+arrows** extend, **Ctrl+arrows** jump to the edge of the data, **Ctrl+Space** takes the column, **Shift+Space** the row, and **Ctrl+A** the table.
 
-### Selecting columns and rows
-
-The reference guides are the selection handles, the way a spreadsheet's column letters and row numbers are:
-
-- **Press a column letter** to select that whole column, header included, or a **row number** to select that whole row.
-- **Drag along the letters or the numbers** to take a span of columns or rows. **Shift-press** a second guide to extend the last one instead.
-- **Press the corner box**, above the row numbers and left of the letters, to take the whole table.
-- Whatever you take is an ordinary selection: colors, text styles, alignment, borders, number formats, Fill down/right, AutoSum and Clear values all act on every cell of it, and the selection bar shows Sum, Avg and Count for it. In Live Preview it is Obsidian's own table selection, so copy, cut and Delete work on it too.
-- The **column resize band wins over the letter it crosses**, exactly as those same pixels do in Excel: the few pixels either side of a column divider still resize, and the rest of the letter selects.
-
-### Selecting from the keyboard
-
-In Live Preview, the selection keys are Excel's. Reading view has no cursor, so there is nothing to extend from there.
-
-| | |
-| --- | --- |
-| **Shift+arrows** | extend the selection a cell at a time |
-| **Ctrl+arrows** | jump to the edge of the data: along a run to its last cell, or over a gap to the next thing there is |
-| **Ctrl+Shift+arrows** | extend all the way to that edge |
-| **Ctrl+Space** | take the whole column |
-| **Shift+Space** | take the whole row |
-| **Ctrl+Shift+Space**, **Ctrl+A** | take the whole table |
-
-Whatever you take is an ordinary selection, so colors, number formats, Fill down, AutoSum, copy and Delete all act on it, and the selection bar shows Sum, Avg and Count.
-
-**These keys still belong to the text first.** A table cell is a text editor, and Shift+Right selecting the next letter matters more than Shift+Right selecting the next cell. So the sideways keys stay with the text until the caret runs out of it: Shift+Right selects letters to the end of the cell and then starts taking cells, and Ctrl+Left goes on jumping words while there are words to jump. Up and down never had a text meaning to take away, a cell being a single line, so those always take cells. Once a block is selected, all of them take cells. An empty cell is at both ends of its text at once, so a fresh table behaves like a grid straight away.
-
-Shift+Space defers the same way, because holding Shift through the space of "Hello World" is a slip worth forgiving. **Ctrl+A** takes the table on the first press and falls through to Obsidian on the second, so selecting the whole note from inside a table still works, which is also how Excel escalates.
-
-Rows an AutoFilter is hiding are stepped over rather than through, so the keys move between the rows you can actually see.
+**These keys still belong to the text first.** A table cell is a text editor, and Shift+Right selecting the next letter matters more than selecting the next cell. So the sideways keys stay with the text until the caret runs out of it, then start taking cells. Up and down never had a text meaning to take away, so those always take cells.
 
 ### The fill handle
 
-The small square on the bottom-right corner of the selection. Drag it over the cells you want filled and a label follows the pointer reading the value that will land where it is, so you can see the series before you drop it.
+Drag the small square at the corner of a selection, and a label follows your pointer showing the value that will land there.
 
-What lands depends on what you dragged from, the way it does in a spreadsheet:
+- **Dates** walk a day at a time, or a month at a time when your selection steps months. The style you wrote is the style written back.
+- **Numbers**: two or more set their own step, a lone one copies. Currency symbols, separators, and percent signs all survive.
+- **Weekdays and month names** walk and wrap. **Text with a number in it** increments the number.
+- **Formulas** are never extrapolated. They copy with their references shifted, so `=C2-B2` dragged down becomes `=C3-B3`, and `$B$1` stays put.
 
-- **Dates** walk a day at a time, or a month at a time when the selection steps months. A run sitting on month ends stays on them, so Jan 31 goes to Feb 28 and on to Mar 31. The date style you wrote is the one written back, `8/4/2026` or `2026-08-04` or `Aug 4, 2026`.
-- **Numbers**: two or more set their own step, a lone one copies (a rate dragged down a column is the far more common drag). Currency symbols, thousands separators, decimal places, percent signs and accounting parentheses all survive: `$1,000.00` and `$2,000.00` fill to `$3,000.00`.
-- **Times** step by the interval between them, or an hour from a lone cell.
-- **Weekdays and month names** walk and wrap, keeping the abbreviation and the case you used. **Text carrying a number** increments the number, zero padding included, and the *last* number in the text is the one that moves.
-- **Formulas** are never extrapolated. They are copied with their references shifted to where they land, so `=C2-B2` dragged down becomes `=C3-B3` and `=C2*$B$1` keeps its rate. Live column sums copy the same way.
-- Anything with no series in it repeats, so a block of two colors fills as a stripe.
+Drag up or left and the series runs backwards. The whole drag is one undo, however many cells it covered.
 
-Drag **up or left** and the series runs backwards. Select several columns and each fills its own series independently, so a Date column and an Amount column dragged together do not contaminate each other. The whole drag is **one edit**, so it is one undo however many cells it covered, and the source cell's colors, borders and number format travel with it.
+## Formulas
 
-The fill writes into rows the table already has; it will not grow the table, so add rows first (right-click → *Insert* › *Row below*, or the panel's Data section) if you are filling past the end. Turn the handle off in Settings → **Fill handle**.
+Type `=SUM(B2:B4)` into a cell, or use the formula bar. The computed value is stored in the Markdown so notes render everywhere, the formula rides along in the wrapper, and everything recalculates when the cells it reads change.
 
-### Copy, cut and paste cells
-
-Select a block and press **Ctrl+C**, then click where it should go and press **Ctrl+V**. The block's top-left lands on the cell you targeted, and the whole cell travels: value, formula, colors, borders and number format. **Ctrl+X** cuts. Everything is also on the right-click menu, in the panel's Data section, and in the command palette as *Copy cells*, *Cut cells* and *Paste cells*, which is where to give them a hotkey.
-
-- **Formulas re-point themselves.** A copied `=C2-B2` pasted a row down becomes `=C3-B3`, and `$B$2` holds still, exactly as with Fill down. A **cut** is different, and different in the way Excel is: it moves the cells rather than copying them, so their references keep pointing where they already pointed.
-- **A cut clears its source when the paste lands**, not when you press Ctrl+X, so a move is one undo and a cut you never paste costs you nothing. If those cells changed in between, the paste still lands and the source is left alone rather than clearing whatever sits there now. A cut only takes its source with it inside the note it came from.
-- **Rows grow, columns clamp.** A block that runs off the bottom adds the rows it needs. One that runs off the right side is trimmed and says how many cells it dropped, because a Markdown table's column count is fixed by its divider row.
-- **A selection that is a whole multiple of the block tiles it**, so one cell copied and pasted over ten fills all ten, the same as in Excel.
-- **Ctrl+C also lands in Excel.** The copy puts plain tab-separated text on the system clipboard alongside the block it keeps for itself, so the same press pastes into Excel, Sheets, or anywhere else. Going the other way, tab-separated or multi-line text pasted into a table spreads across cells from the targeted one instead of piling into it.
-
-**Paste special** (right-click → *Paste special*, the panel's *Paste…*, or its own commands) is Excel's menu:
-
-| | |
-| --- | --- |
-| **All** | the whole cell, look included |
-| **Values** | the numbers only. A live formula lands as the number it was showing, and the destination keeps its own formatting |
-| **Formulas** | the formulas, re-pointed to where they land, into the destination's own formatting |
-| **Formats** | the colors, borders and number format, leaving every value where it is |
-| **Transpose** | the block rotated, so a column becomes a row |
-
-Column widths, conditional color rules and per-table appearance flags never travel: they describe the column rather than the cell that landed in it, which is the same division Fill down makes.
-
-### Data validation (a column's list of values)
-
-Give a column the values it is allowed to hold, and every cell in it gets a chevron that offers them. A status column becomes a click instead of a retype, and stops growing both `Done` and `done`.
-
-Open it with **Data validation…** (the panel's Data section as **List…**, the command palette, or the table menu), type one value per line, and Save. **From column** fills the box with what the column already holds, which is usually the fastest way in: seed it, delete the two typos, save.
-
-- The chevron sits beside the cell's own content, so colors, number formats and everything else the cell is wearing stay exactly as they were.
-- **Values off the list are still allowed.** Markdown is the source of truth and a note edited on another device, or by another plugin, can hold whatever it likes; a list that refused those would be lying about what it controls. What it does is put the right values one click away. If you want the strays to stand out, a conditional color rule with `matches pattern` will mark them.
-- The list is stored as `data-list` on the column's header cell, beside the width, the color rules and the filter, so it travels with the file and survives sorts and column moves. **Remove list** takes it off.
-
-It pairs with [AutoFilter](#autofilter): a column with a fixed vocabulary is exactly the column worth filtering by value, and a list keeps that value list short and clean.
-
-### AutoFilter
-
-Turn it on (Settings → **AutoFilter**, or the panel's **View → Filter** for one table) and every column header grows Excel's funnel button. Click it for that column's dropdown:
-
-- **Sort A→Z / Z→A** at the top, the same sort the panel does, so the thing you reach for first is where you are already looking.
-- **Filter by value**: every distinct value in the column with the number of rows behind each, ticked to keep. There is a search box for finding one in a column of hundreds, and **(Select all)** ticks what the search is showing rather than everything, which is what makes it useful there. Blanks are listed as **(blank)** and can be filtered like any other value.
-- **Conditions**: contains, begins with, ends with, equals, greater than, less than, between (`10 ~ 20`), is empty, is not empty. They are the same operators the conditional color rules use, so they mean there what they mean here.
-- **Clear** takes the filter off the column; *Clear all filters in this table* (command palette, or the panel's Data section) takes off every one.
-
-The right-click menu's **Filter** flyout is the shortcut to the same thing: *Filter by this cell's value* is Excel's one-click filter (it keeps the rows whose cell in this column reads the same as the one you clicked, matching on what the cell reads as rather than how it is stored, so a bolded or linked cell filters like any other), *Filter column…* opens the dropdown above, and *Clear filters* takes every filter off the table.
-
-Changes land on **OK**, not on every tick, because the filter is stored in the note and a write per checkbox would be exactly that.
-
-**A funnel in the accent color means that column is filtering.** It is the only sign on screen that rows are missing, so it is worth knowing. Columns combine with AND: a row has to pass every filter to stay.
-
-**What is stored, and what isn't.** Filtering hides rows on screen and never rewrites one. The only thing written is the filter itself, one `data-flt` attribute on the column's header cell, next to the width and color rules that already live there. That means a filtered view survives closing the note, and travels with the file to your other devices; it also survives sorting and column moves, because the header cell moves with its column. Take the plugin away and every row is simply visible again.
-
-A value list stores whichever side is shorter, the values shown or the values hidden, and that also decides what a value arriving later does: untick two of forty and new arrivals keep showing, tick one of forty and they do not. That is the same rule Excel follows, and storing the shorter side picks it on its own.
-
-**Everything acts on the rows you can see.** Copy, cut, Clear values, colors, number formats, Fill down, AutoSum and the Sum/Avg/Count chip all skip what a filter is hiding, the way Excel acts on the visible cells of a filtered range. It matters for the selections you can make without looking at the rows: pressing a column's guide letter takes the whole column, and Shift+arrows can reach across a hidden row. Formulas still land pointing at the right cells, too: a copied block can have a hole in the middle of it, and each row moves by the distance it actually travelled.
-
-**Totals under a filter use `SUBTOTAL`.** A live `=SUM(B:B)` totals the whole column whether or not rows are hidden, exactly as `SUM` does in Excel. `SUBTOTAL(9, B2:B20)` is the one that skips what a filter is hiding, and **Insert totals row** writes it for you when the table is already filtering, which is what AutoSum does in Excel. Codes 1 to 11 and 101 to 111 both work and read the same here, there being no hiding rows by hand to tell apart. Turning a filter on *after* a totals row exists does not rewrite it; change the cell to `SUBTOTAL` yourself, or delete the row and insert it again.
-
-Row numbers in the guides skip where rows are hidden, the way a spreadsheet's do, because a hidden row is still a row of the file.
-
-### Checkboxes, highlights & column widths
-
-- **Checkboxes**: the ☑ button in the Text row adds `[ ]` to the cell (follows Apply to, so a column of todos is one click). Cells starting with `[ ]` / `[x]` render as **real checkboxes**: tick them in Reading view (or unfocused Live Preview cells) and the markdown updates itself. The markdown stays a plain `[x] Buy milk`.
-- **Text highlight**: the Colors section has a third mode, **Fill | Text | Highlight**. Highlight paints just the data inside the cell (rounded, like a text highlighter) instead of flooding the whole cell; it's stored as the same span with a `ptb-hl` marker class.
-- **Column widths**: hover the right edge of any **header cell** and drag (the cursor changes). This works in Reading view and Live Preview. The width is saved as `data-w` on that column's header cell, so it survives sorting and column moves and degrades to nothing without the plugin. Right-click → *Table* › *Reset column width* to clear it. **Phones ignore stored widths** so columns can shrink and text can wrap to fit the screen; tablets and desktops apply them.
-- **Auto-fit column widths**: the panel's **Auto-fit** button (also in the right-click menu and the command palette) measures the rendered table and sizes every column to its widest entry, the smallest width that still shows all the data. **Double-click** a header cell's right edge to auto-fit just that column, like Excel. The results are stored as the same `data-w` tags a drag would write.
-
-### Live calculations
-
-The **Σ Calc** button turns the targeted cell into a **live calculation** over its column or row (Sum, Average, Min, Max, or Count):
-
-1. Add a "Total" row if you don't have one (right-click the table → *Insert* › *Row below*), or skip the manual steps entirely: the panel's **Totals row** button (or the *Insert totals row* command) appends one with a label and a live sum under every numeric column.
-2. Put the cursor in (or click) the cell where the result should go.
-3. Click **Σ Calc** and pick a function. From then on the value **recalculates automatically** whenever the note changes (shortly after you stop typing, on file open, and on external edits/sync). Live cells show a subtle dotted underline. Picking a different function on a live cell switches it; picking the same one (or **Freeze value**) turns it back into plain text.
-
-In the Markdown, a live cell is just a marked span holding the last value, so the table stays valid everywhere:
-
-```markdown
-| Total | <span class="ptb" data-calc="sum:col">$130.60</span> |
-```
-
-The math understands `$`/`€`/`£`/`¥` prefixes, thousands commas, and accounting-style `(5.00)` negatives; it ignores text cells, the header row, and the result cell itself, and matches the output style to the inputs (`$32.00 + $19.60 + $79.00 → $130.60`; Count is always a bare integer). Colors on the cell are preserved, and calcs can feed other calcs (row totals + a grand total settle automatically). If a live value ever looks stale, any edit to the note refreshes it. In the formula bar a live calc reads as the formula it is, such as `=SUM(B:B)` for a column sum or `=SUM(3:3)` for a row sum.
-
-### Formulas
-
-Cells can hold Excel-style formulas. Type `=SUM(B2:B4)` (or `=C2*1.08`, `=AVG(B2,B4)`, `=(A2+A3)*2`, `=SUM(B:B)` for a whole column) into a cell, use the **formula bar** at the top of the sidebar (Enter or clicking away commits to the cell you loaded it from; Esc cancels), or right-click and choose *Edit value / formula…*. The cell becomes a live formula: the computed value is stored in the markdown (so notes render everywhere), the formula rides along in the wrapper, and everything recalculates automatically when referenced cells change. References are Excel-literal: column letters and 1-based rows that count the header, so `C1` is column C's header cell and `C2` is its first data row, matching the numbers in the gutter and the numbers you would use in a spreadsheet. Header cells are addressable like any other, so a formula can live in one and be referenced from elsewhere. Every function takes ranges, whole columns (`B:B`), whole rows (`3:3`), or plain argument lists:
+References are Excel-literal: column letters and 1-based rows counting the header, so `C2` is column C's first data row, matching the numbers in the gutter.
 
 | | |
 |---|---|
-| Math and stats | `SUM` `AVG`/`AVERAGE` `MIN` `MAX` `MEDIAN` `PRODUCT` `SUMPRODUCT` `STDEV` `POWER` `SQRT` `INT` `MOD` `ABS` `ROUND` `ROUNDUP` `ROUNDDOWN` |
-| Sparklines | `SPARKLINE(B2:G2)` for a row of block characters, `SPARKLINE(B2:G2, "win")` for wins and losses |
-| Filtered totals | `SUBTOTAL(9, B2:B20)`, and the other function codes, which skip what an [AutoFilter](#autofilter) is hiding |
+| Math and stats | `SUM` `AVG` `MIN` `MAX` `MEDIAN` `PRODUCT` `SUMPRODUCT` `STDEV` `POWER` `SQRT` `INT` `MOD` `ABS` `ROUND` `ROUNDUP` `ROUNDDOWN` |
 | Counting | `COUNT` `COUNTA` `COUNTBLANK` |
 | Conditional | `IF` `IFS` `SWITCH` `IFERROR` `AND` `OR` `NOT` `SUMIF` `COUNTIF` `AVERAGEIF` |
-| Multi-criteria | `SUMIFS` `COUNTIFS` `AVERAGEIFS`, each taking as many range/criteria pairs as you need |
+| Multi-criteria | `SUMIFS` `COUNTIFS` `AVERAGEIFS` |
 | Text | `LEN` `LEFT` `RIGHT` `MID` `TRIM` `UPPER` `LOWER` `CONCAT` |
 | Lookup | `XLOOKUP` `VLOOKUP` `MATCH` `INDEX` |
-| Dates | `YEAR` `MONTH` `DAY`, read off a date cell |
+| Dates | `YEAR` `MONTH` `DAY` |
+| Other | `SPARKLINE`, `SUBTOTAL` (which skips rows a filter is hiding) |
 
-**The multi-criteria ones take Excel's argument order**, which is the reverse of their single-criteria siblings and is where everyone trips: `SUMIF(range, criteria, [sum_range])` puts the condition first, while `SUMIFS(sum_range, range1, criteria1, …)` puts the totals first and then as many range/criteria pairs as you like. `COUNTIFS` is pairs only. Every range has to be the same size as the one being aggregated; a mismatch is a `#VALUE!` rather than a quiet answer lined up from the top. Criteria read the same as they always did, so `">100"` and `"East"` both work.
+Operators are Excel's, with Excel's precedence, and everything is evaluated by a built-in parser, never `eval`. `TODAY()` and `NOW()` are deliberately absent: computed values are stored in the note, so a clock-dependent formula would rewrite your notes every time the date rolled over.
 
-`XLOOKUP(value, lookup_array, return_array, [if_not_found])` is the one worth reaching for over `VLOOKUP`: the column you want back is named rather than counted off, so **it can sit to the left of the one you search**, and the fourth argument answers a miss without an `IFERROR` that would also swallow real errors.
+**Fill down and fill right** apply a formula across a range, with `$` anchoring what should not travel, exactly as in Excel.
 
-`IFS(cond1, val1, cond2, val2, …)` replaces nested `IF`s and returns `#N/A` if nothing matches, which is why a final always-true condition is how you write "otherwise". `SWITCH(value, match1, result1, …, [default])` does the same against a value rather than a condition, and takes its default as a spare argument on the end.
+**References survive editing.** Insert a row and `=SUM(D2:D3)` becomes `=SUM(D2:D4)`. Sort or move rows and every formula travels with its data instead of reading whatever landed in that slot. Delete something a formula actually named and you get `#REF!`, which tells you what to go fix rather than a plausible wrong number.
 
-Operators are Excel's, with Excel's precedence: `+ - * / ( )`, `^` for powers (right associative, so `2^3^2` is 512), `&` to join text, a postfix `%`, and the comparisons `= <> > < >= <=`. Unary minus binds tighter than `^`, so `-2^2` is 4, same as Excel. Everything is evaluated by a built-in parser, never `eval`. `TODAY()` and `NOW()` are deliberately absent: computed values are stored in the note, so a clock-dependent formula would rewrite your notes on open every time the date rolled over. **Fill down and fill right** write a formula once and apply it to a range. Drag-select the cells and run *Fill down* (the panel's `Fill ↓`, the right-click menu, or the command, which takes a hotkey if you want Excel's Ctrl+D): the top of the selection copies into the rest, and each copy's references move with it, so `=C2-B2` becomes `=C3-B3` down the column. With a single cell targeted it fills from the row above, the way Ctrl+D does in Excel. *Fill right* is the same across columns. Anchor anything that shouldn't travel with `$`: `=B3*$B$2` filled down keeps reading the one rate cell while its other reference follows each row. `$B$2` pins both, `$B2` pins the column, `B$2` pins the row, exactly as in Excel, and anchors are ignored when the formula is simply evaluated. Note that a `$` only holds a copy still: inserting a row above an anchored cell still moves the reference, because the cell itself moved, which is also how Excel behaves.
+**When a formula fails it says which kind of wrong it is**, using Excel's error values, because each points somewhere different: `#VALUE!` at an argument, `#NAME?` at what you typed, `#REF!` at something deleted, `#N/A` at a lookup that found nothing, `#DIV/0!` at impossible arithmetic. There is one Excel does not have, `#CIRC!`, for a cell referring to itself, because a silent 0 is the failure this plugin is least willing to ship.
 
-**References follow structural edits, the way Excel's do.** Insert a row in the middle and `=SUM(D2:D3)` becomes `=SUM(D2:D4)`; the rows below keep pointing at their own cells. Delete a row and the range shrinks to match. Move or sort rows and every formula travels with its data instead of reading whatever landed in that slot. Duplicate a row and the copy computes from its own cells. Insert or delete a column and the letters shift. Delete something a formula actually named and you get `#REF!`, which says what to go fix, rather than a plausible wrong number.
+## Conditional colors, bars, and icons
 
-**When a formula fails it says which kind of wrong it is**, using Excel's error values, because each one points somewhere different: `#VALUE!` at an argument (text where a number belongs), `#NAME?` at what you typed (an unknown function, or input that will not parse), `#REF!` at something that was deleted, `#N/A` at a lookup that found nothing, `#DIV/0!` and `#NUM!` at impossible arithmetic. Wrap anything in `IFERROR` to substitute a value instead. The one code Excel does not have is `#CIRC!`, for a cell that ends up referring to itself: Excel warns in a dialog and leaves the cell reading 0, which is not available from inside a note, and a silent 0 is the failure this plugin is least willing to ship.
+**Rules** color cells in a column by condition: greater than, less than, equals, contains, between, empty, or a pattern. Classic use is negatives in red. **Apply once** paints the matches now; **Add rule** stores it and re-applies as values change. Colors you set by hand always win over rules.
 
-The **formula bar completes function names** as you type: `=VL` offers `VLOOKUP`, arrow keys move through the list, Tab or Enter accepts and drops you inside the parentheses. And it does **point mode**, Excel's click-to-reference: with the caret somewhere a reference could go (just after `=`, an operator, `(`, or `,`) the bar's border picks up the accent color, and clicking a cell inserts its address instead of jumping to it. Click through the cells you want, type the operators between them, press Enter. Anywhere else in the formula a click still just targets that cell, so nothing changes about the way you normally move around. Formula values feed live calcs and other formulas; chains settle automatically. Formulas and live calcs keep their number format: formatting one (quick buttons or Format cells…) stores the format on the cell, and every recomputation renders through it. A formula's own format wins over its row's, which wins over its column's.
+**Data bars** draw a bar behind every numeric cell, as long as the value is against the column's largest. **The baseline is zero** whenever the column holds no negatives, which is nearly always. That is what a bar is read as: half the length means half the value. Excel's automatic rule instead stretches the smallest to a stub and the largest to full width, which makes 99 and 100 look like nothing and everything.
 
-### Conditional color rules
+**Icon sets** mark each cell by which third of the column's range it sits in, with arrows, traffic lights, or symbols. The bands are thirds of the range rather than measured from zero, because an icon is a rank rather than a quantity.
 
-**Rules…** (sidebar or command palette) colors cells in the targeted column by condition: pick an operator (greater than / less than / equals / contains / between / is empty / is not empty / matches pattern), a value where the condition needs one (`between` takes `10 ~ 20`; patterns are case-insensitive regular expressions), and fill/text colors. Classic use: negatives in red (`less than 0` gives red text). The **color scale (min→max)** condition is different: it tints every numeric cell between two fills by where its value sits in the column's range. Pick the low and high colors where the color rows normally are, and the gradient re-shades live as values change. **Apply once** paints the matches now and stores nothing; **Add rule** stores the rule on the column's header cell and re-applies it automatically as values change. A column can hold several rules: they are checked top to bottom and the first match colors the cell, so put the more specific condition first. Colors you set by hand on individual cells always win over rules. Reopen **Rules…** on any cell in the column to see its rules and edit or remove them (removing a rule leaves the colors it already painted). Rules live per column, so every column of every table can have its own set. The dialog floats, so drag it by its title if it covers your table.
+Bars and icons are drawn rather than written into your note, so they re-scale as values change and as a filter hides rows.
 
-### Data bars
+## AutoFilter
 
-The **data bar** condition in the same dialog draws a bar behind every numeric cell in the column, as long as the value is against the column's largest. Pick a color, **Add rule**, and the column reads as a chart without stopping being a table.
+Turn it on and every column header grows Excel's funnel. Click it for **Sort A→Z**, **filter by value** (with a count behind each and a search box), or **conditions** like contains, between, and is empty.
 
-**The baseline is zero** whenever the column holds no negatives, which is nearly always. That is what a bar is read as: half the length means half the value, and 99 and 100 look nearly the same because they nearly are. Excel's automatic rule instead stretches the smallest value to a stub and the largest to full width, which makes those two look like nothing and everything. A column that does hold negatives has no honest zero to measure from, so that one spans its own range instead.
+**A funnel in the accent color means that column is filtering**, which is the only sign on screen that rows are missing. Columns combine with AND.
 
-**Nothing is written to the note.** This is the one conditional format that is drawn rather than stored, and deliberately: a color survives the plugin being uninstalled and is worth writing into the cell for that, but a bar cannot survive it at all, so storing one would buy nothing and would rewrite every cell of the column each time any value in it changed. The rule itself still lives on the header cell like every other, so it travels with the file.
+**Filtering hides rows and never rewrites one.** The only thing written is the filter itself, so a filtered view survives closing the note and travels to your other devices. Take the plugin away and every row is simply visible again.
 
-Because it is measured at render time it keeps up with everything: edit a value and the column re-scales, and **filter the table and the bars re-scale to the rows that are left** rather than to rows nobody can see. A cell with nothing numeric in it gets no bar, and a cell that carries a fill of its own keeps it, behind the bar. Bars sit alongside the other rules on a column: the bar never counts as a match, so the conditions under it still run.
+Everything acts on the rows you can see, the way Excel acts on a filtered range. For totals, `SUBTOTAL` is the one that skips hidden rows, and **Insert totals row** writes it for you when the table is already filtering.
 
-### Icon sets
+## More tools
 
-The **icon set** condition marks every numeric cell by which third of the column's range its value sits in. Three sets: **▲ ▬ ▼ arrows**, **traffic lights**, and **✓ ! ✗ symbols**, green through amber to red.
+- **Format painter**: the brush copies one cell's look onto others. Click once to paint the next cell, twice to keep painting. Copying a cell with no formatting lets you strip formatting off others.
+- **Borders** work like Excel's menu, including a pen you can draw and erase edges with.
+- **Checkboxes**: cells starting with `[ ]` render as real checkboxes you can tick, and the Markdown stays a plain `[x] Buy milk`.
+- **Column widths**: drag a header's edge, or use **Auto-fit** to size every column to its widest entry. Phones ignore stored widths so text can wrap.
+- **Summarize** groups by one column and totals another into a new plain Markdown table, which everything else works on immediately.
+- **Cleanup**: remove duplicate rows, text to columns, transpose, and find and replace within one table. Formulas follow all of it.
+- **Import and export**: paste rows from Excel or CSV, or copy the whole table out as clean CSV.
 
-**The bands are thirds of the column's own range**, which is Excel's rule and is deliberately different from a data bar. A bar is a quantity and needs a zero to be read against; an icon is a rank, and ranking against zero would put every icon in the top band the moment a column held no small values. So a column of 10, 20, 30 gets one of each, where the same column's bars are a third, two thirds and full.
+Every one of these is also a command, so anything you use often can take a hotkey.
 
-Everything else matches the bars: drawn rather than stored, re-scaled as values change and as a filter hides rows, no icon on a cell with nothing numeric in it, and never counted as a match so the conditions under it still run. A column can carry both, and a bar with an icon in front of it is a readable way to show a number and its standing at once.
+## On mobile
 
-The glyph is CSS generated content rather than anything in the cell, so it stays out of what the filters, the bars and the dropdown's value list read, and out of the note entirely.
-
-### Format painter
-
-The **brush** in the Text row copies one cell's look and paints it onto others. What travels is the appearance: fill and text colors, whether the fill is a highlight, cell borders, and the number format. What stays behind is the value, the column width, and any calculation or formula, because those are not how a cell looks and a painter that moved them would be a different tool.
-
-The brush **cycles through three states**, so nothing is hidden behind a gesture you have to know about:
-
-| Click | State | What happens |
-| --- | --- | --- |
-| once | **loaded** (brush lights up) | the next cell you click gets the look, then the brush lets go |
-| twice | **locked** (brush gains a ring) | every cell you click gets the look, until you stop it |
-| again | off | the brush lets go |
-
-While the brush is holding something the pointer turns into a copy cursor over table cells, so you can tell at a glance that the next click will paint rather than select. **Esc** puts it down from either state, as does clicking the brush. Coming from Excel, a double-click still lands you on locked, because two clicks cycle there anyway.
-
-**Copying a cell that has no formatting is a normal thing to do**: the brush then holds "no look", and painting strips colors, borders, and number format off whatever you click. That is how you clear formatting from a few scattered cells without touching their values.
-
-### Sort & reorder
-
-The **Sort** button sorts the table's body rows by the targeted column, ascending or descending:
-
-- **Numbers and currency sort numerically** (`$1,644.00` > `$79.00`), dates like `1/15/2026` or `2026-01-15` sort chronologically, everything else sorts alphabetically; blank cells always land at the bottom.
-- Rows move as whole lines, so **colors and live calcs travel with their rows**, and any row containing a live calc (your Total row) stays **pinned to the bottom**.
-- The same menu has **Move row up/down** and **Move column left/right**; column moves carry the alignment row along.
-
-### Sparklines
-
-`=SPARKLINE(B2:G2)` draws the row it points at as one short string of block characters, and recalculates with everything else when the numbers change.
-
-```markdown
-| Rep | Jan | Feb | Mar | Apr | May | Jun | Trend  | W/L    |
-| --- | --- | --- | --- | --- | --- | --- | ------ | ------ |
-| Ann | 12  | 19  | 15  | 22  | 30  | 28  | ▁▄▂▅█▇ | ▀▀▀▀▀▀ |
-| Bob | 40  | 31  | 33  | 20  | 18  | 9   | █▆▆▃▃▁ | ▀▀▀▀▀▀ |
-| Cid | 5   | -3  | 8   | -1  | 4   | 6   | ▆▁█▂▅▇ | ▀▄▀▄▀▀ |
-```
-
-A second argument of `"win"` draws wins and losses instead: which side of zero each value fell on, which is the one question a bar height cannot answer.
-
-**It is text, not a drawing, and that is the point.** A sparkline is a formula's output, which makes it content rather than formatting: it lives in the cell, it survives the plugin being uninstalled, and it shows up on a phone, on GitHub, and in any Markdown reader. Eight levels is the resolution that buys, which is enough to read a shape and not enough to read a value, which is what a sparkline is for.
-
-**The scale runs from the row's own smallest value to its largest**, not from zero. That is the opposite of a [data bar](#data-bars) and for the opposite reason: a bar sits beside its number and answers "how much", while a sparkline stands in for the numbers and answers "what shape". Measured from zero, a year of temperatures would be twelve identical full bars.
-
-A row where every value is the same draws flat and in the middle. Cells with nothing numeric in them are skipped rather than drawn as gaps, so a half-filled year of months reads as the months so far.
-
-### Cleaning up a table
-
-Four commands for the things people paste data into Excel to do. All of them are on the table menu, in the panel's Data section, and in the command palette.
-
-- **Remove duplicate rows…** ticks every column to begin with; untick the ones that should not count, like a row number or a free-text note, so that "the same customer" can mean two columns rather than all of them. The first of each set stays and matching ignores case, both of which are Excel's rules.
-- **Text to columns…** splits the targeted column on a separator (space, comma, semicolon, tab, hyphen, or anything you type), adding columns to its right for the extra pieces. The widest value decides how many get added. What lands is text: a piece of a split value has no formula to keep.
-- **Transpose table** swaps rows and columns. **Formulas are frozen to their values first**, because a transposed reference does not point where it pointed: `=SUM(B2:B5)` reads a column, and after the swap that column is a row somewhere else entirely. A number that was right beats a formula that is wrong.
-- **Find and replace in table…** works on that table only, with match case and whole-cell options. **Cells holding formulas are skipped**: a formula is code, and replacing "cat" everywhere would otherwise rewrite `=CONCAT` into something that is not a function. Matching is literal, so searching for `$1` or `a.b` means those characters.
-
-Removing rows and adding columns go through the same plans the row and column commands use, so **formulas follow**: a formula pointing at a row that Remove duplicates took away reads `#REF!` rather than quietly pointing at its neighbour, and one referencing a column that Text to columns pushed right follows the letter.
-
-### Summarize (a pivot whose output is a table)
-
-**Summarize…** (the panel's Data section, the table menu, or the command palette) groups the rows by one column and aggregates another, writing the answer as a new table below the source. Pick the two columns by their own header names and one of Sum, Count, Average, Min or Max.
-
-```markdown
-| Region | Sum of Amount |
-| --- | ---: |
-| West | $300.00 |
-| East | $475.00 |
-| **Total** | $775.00 |
-```
-
-- **The result is an ordinary Markdown table**, and nothing marks it as generated. That is the point: filters, data bars, number formats, sorting and everything else work on it the moment it lands, and there is no stale link to a source table that has since been edited. The cost is that it is a snapshot, so run it again for fresh numbers and delete the old one.
-- **Groups come out in the order they first appear**, not sorted. This is the one place it is not Excel: a table is usually already in an order somebody meant, months or stages or priority, and sorting alphabetically would throw that away. Sort it afterwards if that was not the order you wanted.
-- **A column of dollars summarises to dollars**, keeping the currency symbol and the decimal places the column was written with. Count is always a bare integer, because it counts rows.
-- **The grand total is computed over the rows**, not from the group answers. For Sum those are the same number; for Average they are not, since the mean of a set of means is only the mean when the groups are the same size.
-- Rows with nothing in the grouping column collect under **(blank)**.
-
-### Import & export (Excel / CSV)
-
-**Import…** (sidebar or command palette) opens a paste box for rows copied from Excel/Sheets (tab-separated) or CSV text. The delimiter is auto-detected and quoted fields are handled. **Append rows** adds the data to the targeted table; **Replace table** rebuilds it with the first line as the header. With no table targeted, a fresh table is inserted at the cursor. Going the other way, **Copy CSV** puts the whole table on the clipboard as clean CSV (markup and color wrappers stripped) ready for Excel.
-
-Commands (assignable to hotkeys): *Open Power Tables sidebar*, *Toggle floating panel*, *Fill / Color text / Highlight with last color*, *Clear colors in current cell/table*, *Toggle live column/row sum*, *Sort table by current column (asc/desc)*, *Move row/column*, *Insert row above/below*, *Insert column left/right*, *Duplicate row*, *Delete row/column*, *Clear cell contents*, *Import CSV / Excel data…*, *Paste data from the clipboard (append rows)*, *Insert totals row*, *Format cells…*, *Fill down*, *Fill right*, *Copy cells*, *Cut cells*, *Paste cells*, *Paste special: values / formulas / formats / transpose*, *Filter this column…*, *Clear all filters in this table*, *Data validation (column list)…*, *Summarize table…*, *Remove duplicate rows…*, *Text to columns…*, *Transpose table*, *Find and replace in table…*.
-
-### On mobile
-
-Everything renders and edits on phones and tablets; notes colored on desktop look identical on mobile. The panel opens with the *Open panel* command and lives in the right drawer (swipe in from the right edge). For one-tap actions without the drawer, add Power Tables commands to Obsidian's keyboard toolbar (Settings → Toolbar): *Fill with last color*, *Toggle live column sum*, *Insert row below*, and friends. A long-press on any table cell opens the same context menu as a desktop right-click.
+Everything renders and edits on phones and tablets, and notes colored on desktop look identical there. The panel lives in the right drawer, and a long press on any cell opens the same menu as a desktop right-click. Add the commands you use most to Obsidian's own toolbar for one-tap access.
 
 ## Settings
 
-- **Auto-open sidebar**: reveal the Power Tables pane the first time you edit inside a table each session.
-- **Cell reference guides**: Excel-style column letters above and row numbers beside every table, with the header as row 1 and the first data row as 2, exactly as Excel numbers them (on by default). They select, too: see [Selecting columns and rows](#selecting-columns-and-rows).
-- **Hide cell markup while editing**: collapse the `<span>` wrapper and whole-value bold/italic/strike markers in Live Preview, keeping the cell rendered with its colors (on by default).
-- **Striped rows** / **Compact tables**: global table appearance toggles.
-- **Header fill**: paint every table's header row with one color, chosen via the swatch next to the toggle (on by default, soft blue). It's pure styling (no files change) and per-cell header colors you set explicitly still win over it. **Header fill in dark mode** keeps a separate color for dark themes.
-- **Palette (dark mode)**: optional second swatch set used while the app is in dark mode (the panel re-reads it when the theme flips); leave empty to use one palette everywhere.
-- **Sticky headers**: the header row stays pinned while a long table scrolls, in both Reading view and Live Preview (on by default).
-- **AutoFilter**: a filter button on every column header, in both Reading view and Live Preview (off by default; flip it on globally here, or per table with the panel's Filter button). See [AutoFilter](#autofilter). Striped tinting follows the original row positions, so stripes can look uneven while a filter is active.
-- The panel's **This table** buttons (Guides / Striped / Compact / Header / Sticky / Filter) override those appearance settings for just the targeted table. The override is stored in the note like everything else, so it travels with the file and survives sorts and column moves; toggling a table back to the global state removes it.
-- **Palette**: comma-separated hex codes shown 8 per row (up to 32).
-- **Open floating panel on startup**
+Auto-open the sidebar, cell reference guides, hide cell markup while editing, striped rows, compact tables, header fill (with a separate dark-mode color), sticky headers, AutoFilter, and your own color palette. The panel's **This table** buttons override any of the appearance settings for one table only.
 
 ## Limitations
 
-- Tables nested inside callouts or list items: color them from the editing view (cursor targeting works there); Reading-view click targeting may not resolve those cells.
-- Colors are absolute (like Word/Excel), so pick shades that work with your light/dark theme.
+- Tables nested inside callouts or list items: color them from the editing view, since Reading-view click targeting may not resolve those cells.
+- Colors are absolute, like Word and Excel, so pick shades that work with both your light and dark themes.
 
 ## What the catalog's scan reports
 
@@ -365,9 +139,21 @@ The community catalog scans a plugin for what it is *capable* of, which is not t
 
 | What the scan reports | What it is | Where |
 | --- | --- | --- |
-| **Clipboard access** | **Writing:** the CSV from **Copy table as CSV**, the tab-separated text from **Copy cells** and **Cut cells**, and a diagnostic report from the troubleshooting command. **Reading:** **Paste cells** and **Paste rows**, which take spreadsheet rows off the clipboard and put them in the table you targeted. Every one of them is something you just clicked, ran, or pressed Ctrl+C/X/V for; the Ctrl+C/X/V handlers stand down unless a table selection is live, and hand the event straight back to Obsidian otherwise. Nothing reads the clipboard on its own, on a timer, or in the background. | [`src/main.ts`](src/main.ts) `copyCells`, `pasteCells`, `pasteFromClipboard`, `copyTableCsv` |
+| **Clipboard access** | **Writing:** the CSV from **Copy table as CSV**, the tab-separated text from **Copy cells** and **Cut cells**, and a diagnostic report from the troubleshooting command. **Reading:** **Paste cells** and **Paste rows**, which take spreadsheet rows off the clipboard into the table you targeted. Every one is something you just clicked or pressed Ctrl+C/X/V for, and the handlers stand down unless a table selection is live, handing the event straight back to Obsidian otherwise. Nothing reads the clipboard on its own, on a timer, or in the background. | [`src/main.ts`](src/main.ts) `copyCells`, `pasteCells`, `pasteFromClipboard`, `copyTableCsv` |
 
 Power Tables makes no network requests of any kind, starts no processes, reads no files outside your vault, and never asks Obsidian for a list of your files. There is no `eval`, no `Function` constructor, no `innerHTML`, and no code fetched and run at runtime.
+
+## More Power Plugins
+
+Each one works on its own, and they fit together when you have more than one.
+
+- **[Power Assistant](https://github.com/obsidian-power-plugins/obsidian-power-assistant)**: record and summarize meetings, capture anything from a link, and ask your notes questions.
+- **[Power Bases](https://github.com/obsidian-power-plugins/obsidian-power-bases)**: board, calendar, timeline, chart, and gallery views for Bases.
+- **[Power Connect](https://github.com/obsidian-power-plugins/obsidian-power-connect)**: sync your vault through your own Dropbox, OneDrive, or Google Drive.
+- **[Power Desk](https://github.com/obsidian-power-plugins/obsidian-power-desk)**: your calendars and your mail, inside your vault.
+- **[Power Editor](https://github.com/obsidian-power-plugins/obsidian-power-editor)**: a formatting toolbar, drag-and-drop blocks, and WYSIWYG editing.
+- **[Power Explorer](https://github.com/obsidian-power-plugins/obsidian-power-explorer)**: arrange files by hand, and search a huge vault instantly.
+- **[Power Extract](https://github.com/obsidian-power-plugins/power-extract)**: reads the text inside images so you can search it.
 
 ## Build from source
 
@@ -377,10 +163,10 @@ npm run build   # typecheck + bundle main.js
 npm test        # unit tests for the table-rewrite logic
 ```
 
-`node_modules/` is build tooling only (TypeScript, esbuild, Obsidian API types). It is never shipped; the installed plugin is just `manifest.json`, `main.js`, and `styles.css` (about 31 KB total). You can delete `node_modules/` at any time and recreate it with `npm install`.
+The installed plugin is just `manifest.json`, `main.js`, and `styles.css`, about 31 KB in total.
 
 ## Support
 
-Power Tables is built and maintained by one person. If it earns a place in your
-daily vault, you can [buy me a coffee](https://buymeacoffee.com/powerplugins).
-Nothing in the plugin is held back either way.
+Power Tables is built and maintained by one person. If it earns a place in your daily vault, you can [buy me a coffee](https://buymeacoffee.com/powerplugins). Nothing in the plugin is held back either way.
+
+[![Buy me a coffee](docs/images/buy-me-a-coffee.png)](https://buymeacoffee.com/powerplugins)
