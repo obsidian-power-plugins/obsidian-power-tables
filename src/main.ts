@@ -548,6 +548,7 @@ export default class PowerTablesPlugin extends Plugin {
 	private outlined: HTMLElement | null = null;
 	private scanQueued = false;
 	private recalcTimers = new Map<string, number>();
+	private startupRerenderTimer: number | null = null;
 	private panels = new Set<PanelUI>();
 	private tableBars = new Map<MarkdownView, TableBar>();
 	/** The look the format painter is holding, or null when it is off. */
@@ -1051,7 +1052,11 @@ export default class PowerTablesPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.vault.on("modify", (file) => {
-				if (file instanceof TFile && file.extension === "md") this.scheduleRecalc(file.path);
+				// A remote note was already settled on the device that authored it.
+				// Re-reading every downloaded Markdown file (and possibly writing it
+				// again) turns a phone catch-up into a vault-wide recalculation storm.
+				// Opening the note still performs the normal safety recalc.
+				if (file instanceof TFile && file.extension === "md" && !this.remoteApplyInProgress(file.path)) this.scheduleRecalc(file.path);
 			})
 		);
 		this.registerEvent(
@@ -1062,6 +1067,7 @@ export default class PowerTablesPlugin extends Plugin {
 		this.register(() => {
 			for (const t of this.recalcTimers.values()) window.clearTimeout(t);
 			this.recalcTimers.clear();
+			if (this.startupRerenderTimer != null) window.clearTimeout(this.startupRerenderTimer);
 			for (const bar of this.tableBars.values()) bar.destroy();
 			this.tableBars.clear();
 		});
@@ -1075,16 +1081,52 @@ export default class PowerTablesPlugin extends Plugin {
 			})
 		);
 		this.app.workspace.onLayoutReady(() => {
-			if (this.settings.openOnStart) void this.openPanel();
+			// A docked tool panel is reasonable desktop startup chrome, but on a
+			// phone it replaces most of the document. Leave it user-invoked there.
+			if (this.settings.openOnStart && !Platform.isMobileApp) void this.openPanel();
 			// Reading views rendered before this plugin (re)loaded carry no
 			// table stamps, re-run their post-processors once.
-			this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => {
-				const v = leaf.view;
-				if (v instanceof MarkdownView && v.getMode() === "preview") {
-					(v.previewMode as unknown as { rerender?: (full?: boolean) => void }).rerender?.(true);
-				}
-			});
+			this.rerenderReadingViewsAfterStartup();
 		});
+	}
+
+	private remoteApplyInProgress(path: string): boolean {
+		const pc = (
+			this.app as unknown as {
+				plugins?: {
+					plugins?: Record<string, { isApplyingRemote?: (p: string) => boolean }>;
+				};
+			}
+		).plugins?.plugins?.powerconnect;
+		return pc?.isApplyingRemote?.(path) === true;
+	}
+
+	private mobileStartupSettling(): boolean {
+		const pc = (
+			this.app as unknown as {
+				plugins?: { plugins?: Record<string, { running?: boolean; mobileStartupPending?: boolean }> };
+			}
+		).plugins?.plugins?.powerconnect;
+		return pc?.running === true || pc?.mobileStartupPending === true;
+	}
+
+	private rerenderReadingViewsAfterStartup() {
+		if (Platform.isMobileApp && this.mobileStartupSettling()) {
+			this.startupRerenderTimer = window.setTimeout(() => {
+				this.startupRerenderTimer = null;
+				this.rerenderReadingViewsAfterStartup();
+			}, 750);
+			return;
+		}
+		const leaves = Platform.isMobileApp
+			? [this.app.workspace.getMostRecentLeaf()].filter((leaf): leaf is WorkspaceLeaf => leaf != null)
+			: this.app.workspace.getLeavesOfType("markdown");
+		for (const leaf of leaves) {
+			const v = leaf.view;
+			if (v instanceof MarkdownView && v.getMode() === "preview") {
+				(v.previewMode as unknown as { rerender?: (full?: boolean) => void }).rerender?.(true);
+			}
+		}
 	}
 
 	onunload() {
