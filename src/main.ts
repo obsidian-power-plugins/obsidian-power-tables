@@ -6,7 +6,7 @@ import {
 	Menu,
 	type MenuItem,
 	Modal,
-	Notice,
+	Notice as ObsidianNotice,
 	Platform,
 	Plugin,
 	PluginSettingTab,
@@ -20,6 +20,16 @@ import {
 	editorLivePreviewField,
 	setIcon,
 } from "obsidian";
+
+let pluginNoticesEnabled = () => true;
+
+class Notice extends ObsidianNotice {
+	constructor(message: string | DocumentFragment, duration?: number) {
+		super(message, duration);
+		if (!pluginNoticesEnabled()) this.hide();
+	}
+}
+
 import { Facet, RangeSetBuilder, StateEffect } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import {
@@ -299,6 +309,7 @@ interface PowerTablesSettings {
 	/** Draw Borders pen: the style it lays down and the colour it uses. */
 	penStyle: string;
 	penColor: string;
+	showNotifications: boolean;
 }
 
 const DEFAULT_SETTINGS: PowerTablesSettings = {
@@ -333,6 +344,7 @@ const DEFAULT_SETTINGS: PowerTablesSettings = {
 	tableBar: true,
 	penStyle: "thin",
 	penColor: "default",
+	showNotifications: true,
 };
 
 /** Marks editor states that already carry the tag-hider, so sub-editor injection never doubles it. */
@@ -599,6 +611,7 @@ export default class PowerTablesPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		pluginNoticesEnabled = () => this.settings.showNotifications;
 
 		this.registerView(VIEW_TYPE_PT, (leaf) => new PowerTablesView(leaf, this));
 		this.addRibbonIcon("table", "Power Tables", () => void this.openPanel());
@@ -7372,6 +7385,21 @@ class PowerTablesSettingTab extends PluginSettingTab {
 	/** Every row of the settings tab, in order, as plain data: the one source
 	 *  both renderers draw from, so they cannot drift apart. */
 	private buildPages(): Page[] {
+		const general: Row[] = [
+			{
+				name: "Show notifications",
+				desc: "Show popup notices from Power Tables. Turn off to keep Obsidian clear, especially on phones.",
+				help: "When off, Power Tables suppresses every popup notice, including progress, success, warning, and error notices.",
+				build: (s) => {
+					s.addToggle((t) =>
+						t.setValue(this.plugin.settings.showNotifications).onChange(async (v) => {
+							this.plugin.settings.showNotifications = v;
+							await this.plugin.saveSettings();
+						})
+					);
+				},
+			},
+		];
 		const panel: Row[] = [];
 		const appearance: Row[] = [];
 		const palette: Row[] = [];
@@ -7600,6 +7628,7 @@ class PowerTablesSettingTab extends PluginSettingTab {
 		});
 
 		return [
+			{ id: "general", label: "General", rows: general },
 			{ id: "panel", label: "Panel", rows: panel },
 			{ id: "appearance", label: "Appearance", rows: appearance },
 			{ id: "palette", label: "Palette", rows: palette },
