@@ -107,6 +107,7 @@ import {
 	fltValue,
 	FLT_BLANK,
 	clipFromRows,
+	clipFromText,
 	clipToTsv,
 	CellClip,
 	ColFilter,
@@ -683,6 +684,11 @@ export default class PowerTablesPlugin extends Plugin {
 			id: "paste-transpose", icon: "flip-horizontal-2",
 			name: "Paste special: transpose",
 			callback: () => void this.pasteCells("all", true),
+		});
+		this.addCommand({
+			id: "paste-into-cell", icon: "clipboard-type",
+			name: "Paste into a single cell",
+			callback: () => void this.pasteIntoCell(),
 		});
 		this.addCommand({
 			id: "text-last", icon: "type",
@@ -2863,6 +2869,7 @@ export default class PowerTablesPlugin extends Plugin {
 		menu.addItem((i) => i.setTitle("Copy cells").setIcon("copy").onClick(() => run(() => this.copyCells())));
 		menu.addItem((i) => i.setTitle("Cut cells").setIcon("scissors").onClick(() => run(() => this.copyCells(true))));
 		menu.addItem((i) => i.setTitle("Paste cells").setIcon("clipboard-paste").onClick(() => run(() => this.pasteCells())));
+		menu.addItem((i) => i.setTitle("Paste into one cell").setIcon("clipboard-type").onClick(() => run(() => this.pasteIntoCell())));
 		this.flyout(menu, "Paste special", "clipboard-list", (sub) => this.addPasteItems(sub, run));
 
 		menu.addSeparator();
@@ -4371,6 +4378,35 @@ export default class PowerTablesPlugin extends Plugin {
 		new Notice(bits.join(", ") + ".");
 	}
 
+	/**
+	 * Paste the clipboard's text into the targeted cell as one cell, newlines and
+	 * all, instead of splitting it into rows and columns.
+	 *
+	 * The counterpart to the default paste: Ctrl+V takes tab- or newline-separated
+	 * text as a grid, which is right for a copied spreadsheet block and wrong for a
+	 * list or a note you want to keep together. This forces the whole payload into
+	 * the one cell under the target, with line breaks preserved as <br>.
+	 */
+	async pasteIntoCell(text?: string | null) {
+		const at = this.clipTargets();
+		if (!at) return;
+		const incoming = text ?? (await navigator.clipboard.readText());
+		const clip = clipFromText(incoming ?? "");
+		if (!clip) {
+			new Notice("Power Tables: nothing to paste.");
+			return;
+		}
+		const plan = await this.runPlan(at.where, (lines) => planPasteCells(lines, at.targets, clip, "all", false));
+		if (!plan) {
+			this.cantLocate();
+			return;
+		}
+		const bits = [`Pasted into ${plan.pasted} cell${plan.pasted === 1 ? "" : "s"}`];
+		if (plan.added) bits.push(`${plan.added} row${plan.added === 1 ? "" : "s"} added`);
+		if (plan.clamped) bits.push(`${plan.clamped} past the last column dropped`);
+		new Notice(bits.join(", ") + ".");
+	}
+
 	/** Excel's Paste Special menu. The cell is threaded through because this
 	 *  menu is raised from another one, by which point the right-clicked cell is
 	 *  no longer whatever happens to be focused. */
@@ -4600,6 +4636,7 @@ export default class PowerTablesPlugin extends Plugin {
 			["Copy cells", "copy", () => void this.copyCells()],
 			["Cut cells", "scissors", () => void this.copyCells(true)],
 			["Paste cells", "clipboard-paste", () => void this.pasteCells()],
+			["Paste into one cell", "clipboard-type", () => void this.pasteIntoCell()],
 			["Paste special…", "clipboard-list", (e: MouseEvent) => this.showPasteMenu(e)],
 			["Import…", "upload", () => this.openImportModal()],
 			["Paste rows", "clipboard", () => void this.pasteFromClipboard()],
@@ -5722,6 +5759,9 @@ class PanelUI {
 		);
 		this.dataBtn(dgrid, "Paste…", "Paste special: values, formulas, formats or transposed", (e) =>
 			this.plugin.showPasteMenu(e)
+		);
+		this.dataBtn(dgrid, "Paste 1 cell", "Paste the clipboard text into the targeted cell as one cell, line breaks and all", () =>
+			void this.plugin.pasteIntoCell()
 		);
 		this.dataBtn(dgrid, "+ Row", "Insert row below", () => void this.plugin.insertRow("below"));
 		this.dataBtn(dgrid, "+ Column", "Insert column right", () => void this.plugin.insertColumn("right"));

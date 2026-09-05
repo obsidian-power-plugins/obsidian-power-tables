@@ -5153,6 +5153,32 @@ export function clipToTsv(clip: CellClip): string {
 	return clip.rows.map((r) => r.map((p) => cellDisplayText(p).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n");
 }
 
+/**
+ * The whole clipboard payload dropped into one cell, rather than split into a
+ * grid the way {@link clipFromRows} does.
+ *
+ * Newlines become <br> so the text stays a single Markdown table cell and still
+ * renders as separate lines; pipes are escaped so they cannot open new columns.
+ * Blank lines at the very top and bottom come off, but the inside is left as it
+ * was typed: this is for a block of text that is meant to live in one cell,
+ * numbered list and all.
+ */
+export function clipFromText(text: string): CellClip | null {
+	const body = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+	if (!body.trim()) return null;
+	const cell = csvCell(body).replace(/\n/g, "<br>");
+	return {
+		rows: [[` ${cell} `]],
+		srcRows: [0],
+		row: 0,
+		col: 0,
+		refs: "hold",
+		cut: false,
+		path: "",
+		lineNos: [],
+	};
+}
+
 /** A block that came from outside the vault: plain text, and no source
  *  coordinates to shift a reference against. */
 export function clipFromRows(rows: string[][]): CellClip | null {

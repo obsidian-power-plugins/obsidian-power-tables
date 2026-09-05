@@ -82,6 +82,7 @@ import {
 	planCopyCells,
 	planPasteCells,
 	clipFromRows,
+	clipFromText,
 	clipToTsv,
 	filterTag,
 	parseFilterTag,
@@ -1247,6 +1248,17 @@ const pasted = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 4, col: 0 }],
 ok(pasted[4].includes("| x |") && pasted[4].includes("| 1 |"), "and lands as plain values");
 eq(clipToTsv(block), "a\t2\nb\t3", "a block leaves as tab-separated text, wrappers stripped");
 eq(planPasteCells(CPS.slice(), [{ line: 1, col: 0 }], block), null, "the divider row is not somewhere a paste can land");
+
+// a whole block dropped into one cell instead of split into rows
+const oneCell = clipFromText("Line one\nLine two\n\nafter a gap")!;
+eq(oneCell.rows.length, 1, "text pasted into one cell stays a single row");
+eq(oneCell.rows[0].length, 1, "and a single column");
+ok(oneCell.rows[0][0].includes("Line one<br>Line two<br><br>after a gap"), "newlines become <br> so it survives as one markdown cell");
+const inCell = applyPlan(CPS, planPasteCells(CPS.slice(), [{ line: 3, col: 3 }], oneCell));
+eq(inCell.length, CPS.length, "no new rows: the block landed in the one targeted cell");
+ok(inCell[3].includes("Line one<br>Line two"), "and the whole block is in that cell");
+ok(clipFromText("a | b")!.rows[0][0].includes("a \\| b"), "pipes are escaped so they do not open a new column");
+eq(clipFromText("  \n \n"), null, "blank text is nothing to paste");
 
 // --- cleanup: remove duplicates, transpose, text to columns, find and replace ---
 const DUP = [
