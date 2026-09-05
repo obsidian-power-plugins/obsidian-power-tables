@@ -232,6 +232,134 @@ const PASTE_SPECIAL: [string, string, PasteMode, boolean][] = [
 	["Transpose", "flip-horizontal-2", "all", true],
 ];
 
+/** Block wrappers whose own text means nothing: recurse through them rather than
+ *  rendering them, so their children land at the right level. */
+const BLOCK_CONTAINERS = new Set([
+	"div", "section", "article", "main", "body", "html", "table", "tbody", "thead",
+	"tfoot", "tr", "td", "th", "figure", "figcaption", "header", "footer", "nav",
+	"aside", "dl", "dd", "dt", "span", "font", "label",
+]);
+
+/**
+ * A fragment of pasted HTML flattened to the inline Markdown a single table cell
+ * can actually render.
+ *
+ * A cell is an inline context, so bold, italic, inline code and links come
+ * through but real block lists cannot: an ordered list becomes "1." lines and a
+ * bulleted one "•" lines, nested levels indented with non-breaking spaces. Line
+ * breaks are left as "\n" for the caller ({@link clipFromText}) to turn into
+ * <br>. Bold and italic are read from the tag and from an inline
+ * font-weight/font-style as well, because editors like Google Docs carry
+ * emphasis as a style rather than <strong>, and wrap the whole payload in a
+ * <b style="font-weight:normal"> that a tag-only check would read as
+ * everything-bold.
+ */
+function htmlToCellMarkdown(html: string): string {
+	const doc = new DOMParser().parseFromString(html, "text/html");
+	const lines: string[] = [];
+	// Indent with non-breaking spaces: ordinary leading spaces collapse when the
+	// cell renders, so a nested item would otherwise lose its indent.
+	const pad = (d: number) => "  ".repeat(d);
+
+	const bold = (el: HTMLElement) => {
+		const w = el.style.fontWeight;
+		if (w === "normal" || w === "400") return false;
+		return /^(b|strong)$/i.test(el.tagName) || w === "bold" || w === "bolder" || (/^\d+$/.test(w) && +w >= 600);
+	};
+	const italic = (el: HTMLElement) => {
+		if (el.style.fontStyle === "normal") return false;
+		return /^(i|em)$/i.test(el.tagName) || el.style.fontStyle === "italic";
+	};
+
+	const inlineNode = (node: Node): string => {
+		if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? "").replace(/\s+/g, " ");
+		if (node.nodeType !== Node.ELEMENT_NODE) return "";
+		const el = node as HTMLElement;
+		const tag = el.tagName.toLowerCase();
+		if (tag === "br") return "\n";
+		if (tag === "script" || tag === "style") return "";
+		if (tag === "code" || tag === "tt") {
+			const t = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+			return t ? "`" + t + "`" : "";
+		}
+		if (tag === "a") {
+			const t = inline(el).trim();
+			const href = el.getAttribute("href") ?? "";
+			return href && t ? `[${t}](${href})` : t;
+		}
+		let inner = inline(el);
+		const trimmed = inner.trim();
+		if (trimmed && (bold(el) || italic(el))) {
+			const lead = inner.slice(0, inner.length - inner.trimStart().length);
+			const tail = inner.slice(inner.trimEnd().length);
+			const mark = bold(el) ? "**" : "*";
+			inner = lead + mark + trimmed + mark + tail;
+		}
+		return inner;
+	};
+	const inline = (parent: Node): string => Array.from(parent.childNodes).map(inlineNode).join("");
+
+	const pushInline = (indent: number, text: string) => {
+		const t = text.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
+		if (t) for (const ln of t.split("\n")) lines.push(pad(indent) + ln);
+	};
+
+	const walkList = (listEl: HTMLElement, indent: number, ordered: boolean) => {
+		let n = 1;
+		for (const li of Array.from(listEl.children)) {
+			if (li.tagName.toLowerCase() !== "li") continue;
+			const marker = ordered ? `${n++}. ` : "• ";
+			let head = "";
+			const nested: HTMLElement[] = [];
+			li.childNodes.forEach((k) => {
+				if (k.nodeType === Node.ELEMENT_NODE && /^[uo]l$/i.test((k as HTMLElement).tagName)) nested.push(k as HTMLElement);
+				else head += inlineNode(k);
+			});
+			lines.push(pad(indent) + marker + head.replace(/\s+/g, " ").trim());
+			for (const sub of nested) walkList(sub, indent + 1, sub.tagName.toLowerCase() === "ol");
+		}
+	};
+
+	const walk = (parent: Node, indent: number) => {
+		parent.childNodes.forEach((c) => {
+			if (c.nodeType === Node.TEXT_NODE) {
+				const t = (c.textContent ?? "").replace(/\s+/g, " ").trim();
+				if (t) lines.push(pad(indent) + t);
+				return;
+			}
+			if (c.nodeType !== Node.ELEMENT_NODE) return;
+			const el = c as HTMLElement;
+			const tag = el.tagName.toLowerCase();
+			if (tag === "ul" || tag === "ol") {
+				walkList(el, indent, tag === "ol");
+				lines.push("");
+			} else if (/^h[1-6]$/.test(tag)) {
+				const t = inline(el).trim();
+				if (t) {
+					lines.push(pad(indent) + "**" + t + "**");
+					lines.push("");
+				}
+			} else if (tag === "p") {
+				pushInline(indent, inline(el));
+				lines.push("");
+			} else if (tag === "blockquote") {
+				pushInline(indent, "> " + inline(el));
+			} else if (tag === "br") {
+				lines.push("");
+			} else if (tag === "script" || tag === "style" || tag === "head" || tag === "noscript") {
+				// nothing to render
+			} else if (BLOCK_CONTAINERS.has(tag)) {
+				walk(el, indent);
+			} else {
+				pushInline(indent, inline(el));
+			}
+		});
+	};
+
+	walk(doc.body, 0);
+	return lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "");
+}
+
 const VIEW_TYPE_PT = "power-tables-view";
 
 /** How far either side of a column boundary still counts as grabbing it. The
@@ -4378,19 +4506,38 @@ export default class PowerTablesPlugin extends Plugin {
 		new Notice(bits.join(", ") + ".");
 	}
 
+	/** The clipboard's rich HTML flavor, when it has one. The async clipboard API
+	 *  is the only way to reach it from a command, there being no paste event here;
+	 *  it is missing when the source offered only plain text, and blocked outright
+	 *  in some contexts, so every caller falls back to plain text. */
+	private async readClipboardHtml(): Promise<string | null> {
+		try {
+			for (const item of await navigator.clipboard.read()) {
+				if (item.types.includes("text/html")) return await (await item.getType("text/html")).text();
+			}
+		} catch {
+			// no HTML flavor, no permission, or the API is unavailable here
+		}
+		return null;
+	}
+
 	/**
-	 * Paste the clipboard's text into the targeted cell as one cell, newlines and
-	 * all, instead of splitting it into rows and columns.
+	 * Paste the clipboard into the targeted cell as one cell, formatting and all,
+	 * instead of splitting it into rows and columns.
 	 *
 	 * The counterpart to the default paste: Ctrl+V takes tab- or newline-separated
 	 * text as a grid, which is right for a copied spreadsheet block and wrong for a
 	 * list or a note you want to keep together. This forces the whole payload into
-	 * the one cell under the target, with line breaks preserved as <br>.
+	 * the one cell under the target. When the clipboard carries HTML, its bold,
+	 * italic, code, links and lists are kept as the inline Markdown a cell can
+	 * render; otherwise the plain text lands with its line breaks preserved.
 	 */
-	async pasteIntoCell(text?: string | null) {
+	async pasteIntoCell() {
 		const at = this.clipTargets();
 		if (!at) return;
-		const incoming = text ?? (await navigator.clipboard.readText());
+		const html = await this.readClipboardHtml();
+		const md = html ? htmlToCellMarkdown(html) : "";
+		const incoming = md.trim() ? md : await navigator.clipboard.readText();
 		const clip = clipFromText(incoming ?? "");
 		if (!clip) {
 			new Notice("Power Tables: nothing to paste.");
@@ -5760,7 +5907,7 @@ class PanelUI {
 		this.dataBtn(dgrid, "Paste…", "Paste special: values, formulas, formats or transposed", (e) =>
 			this.plugin.showPasteMenu(e)
 		);
-		this.dataBtn(dgrid, "Paste 1 cell", "Paste the clipboard text into the targeted cell as one cell, line breaks and all", () =>
+		this.dataBtn(dgrid, "Paste 1 cell", "Paste the clipboard into the targeted cell as one cell, keeping bold, lists, code and line breaks", () =>
 			void this.plugin.pasteIntoCell()
 		);
 		this.dataBtn(dgrid, "+ Row", "Insert row below", () => void this.plugin.insertRow("below"));
